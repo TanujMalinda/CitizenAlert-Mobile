@@ -1,0 +1,445 @@
+import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
+import '../../services/api_service.dart';
+
+class HealthReportScreen extends StatefulWidget {
+  const HealthReportScreen({super.key});
+
+  @override
+  State<HealthReportScreen> createState() => _HealthReportScreenState();
+}
+
+class _HealthReportScreenState extends State<HealthReportScreen> {
+  final _formKey       = GlobalKey<FormState>();
+  final _api           = ApiService();
+  final _titleCtrl     = TextEditingController();
+  final _descCtrl      = TextEditingController();
+  final _preventionCtrl = TextEditingController();
+  final _facilityCtrl  = TextEditingController();
+
+  String  _diseaseType = 'dengue';
+  String  _severity    = 'medium';
+  String  _district    = 'Colombo';
+  double? _latitude;
+  double? _longitude;
+  bool    _submitting  = false;
+
+  static const _diseaseTypes = [
+    'dengue', 'leptospirosis', 'cholera', 'covid',
+    'food_poisoning', 'respiratory', 'vector_borne', 'other',
+  ];
+  static const _severities = ['extreme', 'severe', 'medium', 'low'];
+  static const _districts = [
+    'Colombo', 'Gampaha', 'Kalutara', 'Kandy', 'Matale',
+    'Nuwara Eliya', 'Galle', 'Matara', 'Hambantota', 'Jaffna',
+    'Kilinochchi', 'Mannar', 'Mullaitivu', 'Vavuniya', 'Puttalam',
+    'Kurunegala', 'Anuradhapura', 'Polonnaruwa', 'Badulla',
+    'Moneragala', 'Ratnapura', 'Kegalle', 'Trincomalee',
+    'Batticaloa', 'Ampara',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _getLocation();
+  }
+
+  @override
+  void dispose() {
+    _titleCtrl.dispose();
+    _descCtrl.dispose();
+    _preventionCtrl.dispose();
+    _facilityCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _getLocation() async {
+    try {
+      LocationPermission perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.whileInUse ||
+          perm == LocationPermission.always) {
+        final pos = await Geolocator.getCurrentPosition();
+        if (mounted) {
+          setState(() {
+            _latitude  = pos.latitude;
+            _longitude = pos.longitude;
+          });
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) { return; }
+    if (_latitude == null || _longitude == null) {
+      _showSnack('Location not available — please enable GPS');
+      return;
+    }
+
+    setState(() => _submitting = true);
+    try {
+      final result = await _api.submitHealthReport({
+        'title':                _titleCtrl.text.trim(),
+        'description':          _descCtrl.text.trim(),
+        'disease_type':         _diseaseType,
+        'severity':             _severity,
+        'latitude':             _latitude,
+        'longitude':            _longitude,
+        'district':             _district,
+        'prevention_protocols': _preventionCtrl.text.trim().isEmpty
+                                ? null
+                                : _preventionCtrl.text.trim(),
+        'health_facility':      _facilityCtrl.text.trim().isEmpty
+                                ? null
+                                : _facilityCtrl.text.trim(),
+      });
+
+      if (!mounted) { return; }
+      _showResult(result);
+    } catch (e) {
+      if (!mounted) { return; }
+      _showSnack('Submission failed: $e');
+    } finally {
+      if (mounted) { setState(() => _submitting = false); }
+    }
+  }
+
+  void _showSnack(String msg) =>
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg), backgroundColor: const Color(0xFF1C2F3F)),
+      );
+
+  void _showResult(Map<String, dynamic> result) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1C2F3F),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(children: [
+          Icon(Icons.local_hospital, color: Color(0xFF66BB6A)),
+          SizedBox(width: 8),
+          Text('Health Report Submitted',
+              style: TextStyle(color: Colors.white, fontSize: 16)),
+        ]),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _resultRow('Status',
+                result['tvm_status'] == 'verified'
+                    ? 'Published'
+                    : 'Pending medical review',
+                result['tvm_status'] == 'verified'
+                    ? const Color(0xFF66BB6A)
+                    : const Color(0xFFFF9800)),
+            const SizedBox(height: 8),
+            _resultRow('CAP ID',
+                result['cap_identifier']?.toString() ?? '—',
+                const Color(0xFF90A4AE)),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0D1B2A),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Text(
+                'Critical sensitivity — citizen health reports require '
+                'mandatory medical authority review before public dissemination.',
+                style: TextStyle(color: Color(0xFF90A4AE), fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.pop(context);
+            },
+            child: const Text('Done',
+                style: TextStyle(color: Color(0xFF4FC3F7))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _resultRow(String label, String value, Color color) => Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('$label: ', style: const TextStyle(
+              color: Color(0xFF90A4AE), fontSize: 13)),
+          Expanded(child: Text(value, style: TextStyle(
+              color: color, fontSize: 13, fontWeight: FontWeight.bold))),
+        ],
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0D1B2A),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF0D1B2A),
+        foregroundColor: Colors.white,
+        title: const Row(children: [
+          Icon(Icons.local_hospital, color: Color(0xFF66BB6A), size: 20),
+          SizedBox(width: 8),
+          Text('Report Health Concern',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        ]),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(height: 1, color: const Color(0xFF2A3F52)),
+        ),
+      ),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            _sectionLabel('HEALTH CONCERN DETAILS'),
+            const SizedBox(height: 8),
+
+            _field(
+              controller: _titleCtrl,
+              label: 'Report Title',
+              hint: 'e.g. Dengue fever cluster near Wellawatte',
+              validator: (v) =>
+                  v == null || v.trim().length < 5 ? 'Min 5 characters' : null,
+            ),
+            const SizedBox(height: 12),
+
+            Row(children: [
+              Expanded(
+                child: _dropdown(
+                  label: 'Disease / Hazard Type',
+                  value: _diseaseType,
+                  items: _diseaseTypes,
+                  onChanged: (v) => setState(() => _diseaseType = v!),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _dropdown(
+                  label: 'Severity',
+                  value: _severity,
+                  items: _severities,
+                  onChanged: (v) => setState(() => _severity = v!),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 12),
+
+            _field(
+              controller: _descCtrl,
+              label: 'Description',
+              hint: 'Describe the health concern, symptoms, or affected area',
+              maxLines: 4,
+              validator: (v) =>
+                  v == null || v.trim().length < 20 ? 'Min 20 characters' : null,
+            ),
+            const SizedBox(height: 12),
+
+            _field(
+              controller: _preventionCtrl,
+              label: 'Prevention Advice (optional)',
+              hint: 'Any known prevention steps (boil water, avoid area, etc.)',
+              maxLines: 2,
+            ),
+            const SizedBox(height: 12),
+
+            _field(
+              controller: _facilityCtrl,
+              label: 'Nearest Health Facility (optional)',
+              hint: 'e.g. Colombo National Hospital',
+            ),
+            const SizedBox(height: 20),
+
+            _sectionLabel('AFFECTED AREA'),
+            const SizedBox(height: 8),
+
+            _dropdown(
+              label: 'District',
+              value: _district,
+              items: _districts,
+              onChanged: (v) => setState(() => _district = v!),
+            ),
+            const SizedBox(height: 8),
+
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1C2F3F),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF2A3F52)),
+              ),
+              child: Row(children: [
+                Icon(
+                  _latitude != null ? Icons.location_on : Icons.location_off,
+                  color: _latitude != null
+                      ? const Color(0xFF4FC3F7)
+                      : const Color(0xFF90A4AE),
+                  size: 18,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  _latitude != null
+                      ? 'GPS: ${_latitude!.toStringAsFixed(4)}, ${_longitude!.toStringAsFixed(4)}'
+                      : 'Acquiring GPS location...',
+                  style: TextStyle(
+                    color: _latitude != null
+                        ? const Color(0xFF4FC3F7)
+                        : const Color(0xFF90A4AE),
+                    fontSize: 13,
+                  ),
+                ),
+              ]),
+            ),
+            const SizedBox(height: 16),
+
+            // TVM notice
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF66BB6A).withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                    color: const Color(0xFF66BB6A).withValues(alpha: 0.3)),
+              ),
+              child: const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.shield_outlined,
+                      color: Color(0xFF66BB6A), size: 16),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'TVM Tier 3 applies — health reports undergo '
+                      'mandatory medical authority review before public dissemination.',
+                      style: TextStyle(color: Color(0xFF90A4AE), fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: _submitting ? null : _submit,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF66BB6A),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                  disabledBackgroundColor:
+                      const Color(0xFF66BB6A).withValues(alpha: 0.5),
+                ),
+                child: _submitting
+                    ? const SizedBox(
+                        height: 20, width: 20,
+                        child: CircularProgressIndicator(
+                            color: Colors.white, strokeWidth: 2),
+                      )
+                    : const Text('Submit Health Report',
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 15)),
+              ),
+            ),
+            const SizedBox(height: 24),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionLabel(String text) => Text(
+        text,
+        style: const TextStyle(
+            color: Color(0xFF66BB6A),
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1.2),
+      );
+
+  Widget _field({
+    required TextEditingController controller,
+    required String label,
+    String? hint,
+    int maxLines = 1,
+    String? Function(String?)? validator,
+  }) =>
+      TextFormField(
+        controller: controller,
+        maxLines: maxLines,
+        style: const TextStyle(color: Colors.white),
+        decoration: InputDecoration(
+          labelText: label,
+          hintText: hint,
+          labelStyle: const TextStyle(color: Color(0xFF90A4AE)),
+          hintStyle: const TextStyle(color: Color(0xFF4A6070), fontSize: 13),
+          filled: true,
+          fillColor: const Color(0xFF1C2F3F),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFF2A3F52)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFF2A3F52)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFF66BB6A)),
+          ),
+        ),
+        validator: validator,
+      );
+
+  Widget _dropdown({
+    required String label,
+    required String value,
+    required List<String> items,
+    required ValueChanged<String?> onChanged,
+  }) =>
+      DropdownButtonFormField<String>(
+        initialValue: value,
+        style: const TextStyle(color: Colors.white),
+        dropdownColor: const Color(0xFF1C2F3F),
+        decoration: InputDecoration(
+          labelText: label,
+          labelStyle: const TextStyle(color: Color(0xFF90A4AE)),
+          filled: true,
+          fillColor: const Color(0xFF1C2F3F),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFF2A3F52)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFF2A3F52)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFF66BB6A)),
+          ),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+        ),
+        items: items
+            .map((e) => DropdownMenuItem(
+                  value: e,
+                  child: Text(e.replaceAll('_', ' '),
+                      style: const TextStyle(fontSize: 13)),
+                ))
+            .toList(),
+        onChanged: onChanged,
+      );
+}
