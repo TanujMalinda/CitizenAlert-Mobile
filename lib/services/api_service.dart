@@ -46,6 +46,19 @@ class ApiService {
   Future<String?> getUserName() => _storage.read(key: 'user_name');
   Future<String?> getUserRole() => _storage.read(key: 'user_role');
 
+  /// Returns true only if a token exists AND the server accepts it.
+  Future<bool> isTokenValid() async {
+    final token = await _storage.read(key: 'jwt_token');
+    if (token == null) return false;
+    try {
+      await _dio.get('/auth/me');
+      return true;
+    } catch (_) {
+      await _storage.deleteAll();
+      return false;
+    }
+  }
+
   // ── Missing Persons ───────────────────────────────────────────────────────
 
   Future<Map<String, dynamic>> getNearbyAlerts({

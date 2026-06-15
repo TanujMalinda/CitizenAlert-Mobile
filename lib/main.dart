@@ -14,8 +14,7 @@ class CitizenAlertApp extends StatelessWidget {
   const CitizenAlertApp({super.key});
 
   Future<bool> _isLoggedIn() async {
-    final token = await ApiService().getToken();
-    return token != null;
+    return ApiService().isTokenValid();
   }
 
   @override
