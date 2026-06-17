@@ -38,6 +38,12 @@ class ApiService {
     return res.data;
   }
 
+  Future<Map<String, dynamic>> registerAuthority(Map<String, dynamic> data) async {
+    // Does NOT store a token — account is pending_approval, cannot log in yet
+    final res = await _dio.post('/auth/register-authority', data: data);
+    return res.data;
+  }
+
   Future<void> logout() async {
     await _storage.deleteAll();
   }
