@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:geolocator/geolocator.dart';
 import '../../services/api_service.dart';
+import '../../services/location_service.dart';
 
 class HealthReportScreen extends StatefulWidget {
   const HealthReportScreen({super.key});
@@ -22,6 +22,8 @@ class _HealthReportScreenState extends State<HealthReportScreen> {
   String  _district    = 'Colombo';
   double? _latitude;
   double? _longitude;
+  bool    _locating    = true;
+  String? _locError;
   bool    _submitting  = false;
 
   static const _diseaseTypes = [
@@ -54,22 +56,65 @@ class _HealthReportScreenState extends State<HealthReportScreen> {
   }
 
   Future<void> _getLocation() async {
-    try {
-      LocationPermission perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied) {
-        perm = await Geolocator.requestPermission();
-      }
-      if (perm == LocationPermission.whileInUse ||
-          perm == LocationPermission.always) {
-        final pos = await Geolocator.getCurrentPosition();
-        if (mounted) {
-          setState(() {
-            _latitude  = pos.latitude;
-            _longitude = pos.longitude;
-          });
-        }
-      }
-    } catch (_) {}
+    setState(() { _locating = true; _locError = null; });
+    final res = await LocationService.getCurrentLocation();
+    if (!mounted) return;
+    setState(() {
+      _latitude  = res.latitude;
+      _longitude = res.longitude;
+      _locError  = res.error;
+      _locating  = false;
+    });
+  }
+
+  Widget _gpsStatusBox() {
+    final ok = _latitude != null;
+    final color = ok
+        ? const Color(0xFF4FC3F7)
+        : _locating
+            ? const Color(0xFF90A4AE)
+            : const Color(0xFFEF5350);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C2F3F),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Row(children: [
+        if (_locating)
+          const SizedBox(
+            width: 16, height: 16,
+            child: CircularProgressIndicator(
+                strokeWidth: 2, color: Color(0xFF4FC3F7)),
+          )
+        else
+          Icon(ok ? Icons.location_on : Icons.location_off,
+              color: color, size: 18),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            _locating
+                ? 'Acquiring GPS location...'
+                : ok
+                    ? 'GPS: ${_latitude!.toStringAsFixed(4)}, ${_longitude!.toStringAsFixed(4)}'
+                    : (_locError ?? 'GPS unavailable'),
+            style: TextStyle(color: color, fontSize: 12.5),
+          ),
+        ),
+        if (!_locating && !ok)
+          TextButton(
+            onPressed: _getLocation,
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text('Retry',
+                style: TextStyle(color: Color(0xFF4FC3F7), fontSize: 12)),
+          ),
+      ]),
+    );
   }
 
   Future<void> _submit() async {
@@ -271,35 +316,7 @@ class _HealthReportScreenState extends State<HealthReportScreen> {
             ),
             const SizedBox(height: 8),
 
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1C2F3F),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFF2A3F52)),
-              ),
-              child: Row(children: [
-                Icon(
-                  _latitude != null ? Icons.location_on : Icons.location_off,
-                  color: _latitude != null
-                      ? const Color(0xFF4FC3F7)
-                      : const Color(0xFF90A4AE),
-                  size: 18,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  _latitude != null
-                      ? 'GPS: ${_latitude!.toStringAsFixed(4)}, ${_longitude!.toStringAsFixed(4)}'
-                      : 'Acquiring GPS location...',
-                  style: TextStyle(
-                    color: _latitude != null
-                        ? const Color(0xFF4FC3F7)
-                        : const Color(0xFF90A4AE),
-                    fontSize: 13,
-                  ),
-                ),
-              ]),
-            ),
+            _gpsStatusBox(),
             const SizedBox(height: 16),
 
             // TVM notice

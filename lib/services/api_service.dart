@@ -188,4 +188,20 @@ Future<Map<String, dynamic>> getDisasterAlert(int alertId) async {
     final res = await _dio.post('/public-health/', data: data);
     return res.data;
   }
+
+  // ── Alert Tips / Responses ────────────────────────────────────────────────
+
+  /// Send information / a tip about an existing alert (any alert type).
+  /// e.g. "I saw the reported bicycle near Pettah market".
+  Future<Map<String, dynamic>> submitAlertResponse(
+      int alertId, Map<String, dynamic> data) async {
+    final res = await _dio.post('/alerts/$alertId/responses', data: data);
+    return res.data;
+  }
+
+  /// List tips on an alert (authority or the alert's original reporter only).
+  Future<Map<String, dynamic>> getAlertResponses(int alertId) async {
+    final res = await _dio.get('/alerts/$alertId/responses');
+    return res.data;
+  }
 }

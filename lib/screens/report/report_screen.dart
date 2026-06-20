@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../services/api_service.dart';
+import '../../services/location_service.dart';
 
 class ReportScreen extends StatefulWidget {
   const ReportScreen({super.key});
@@ -15,12 +16,32 @@ class _ReportScreenState extends State<ReportScreen> {
   final _districtCtrl = TextEditingController();
 
   int?    _age;
-  String  _gender    = 'male';
-  double  _lat       = 6.9271;
-  double  _lng       = 79.8612;
+  String  _gender     = 'male';
+  double? _lat;
+  double? _lng;
+  bool    _locating   = true;
+  String? _locError;
   bool    _submitting = false;
   String? _error;
   bool    _success    = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _getLocation();
+  }
+
+  Future<void> _getLocation() async {
+    setState(() { _locating = true; _locError = null; });
+    final res = await LocationService.getCurrentLocation();
+    if (!mounted) return;
+    setState(() {
+      _lat      = res.latitude;
+      _lng      = res.longitude;
+      _locError = res.error;
+      _locating = false;
+    });
+  }
 
   Future<void> _submit() async {
     if (_nameCtrl.text.trim().isEmpty) {
@@ -29,6 +50,10 @@ class _ReportScreenState extends State<ReportScreen> {
     }
     if (_descCtrl.text.trim().length < 10) {
       setState(() => _error = 'Description must be at least 10 characters');
+      return;
+    }
+    if (_lat == null || _lng == null) {
+      setState(() => _error = 'Location not available — please enable GPS');
       return;
     }
     setState(() { _submitting = true; _error = null; });
@@ -121,15 +146,7 @@ class _ReportScreenState extends State<ReportScreen> {
         const SizedBox(height: 12),
         _field('District', _districtCtrl, Icons.map_outlined),
         const SizedBox(height: 12),
-        Row(children: [
-          Expanded(child: _coordField(
-              'Latitude', _lat.toString(),
-              (v) => setState(() => _lat = double.tryParse(v) ?? _lat))),
-          const SizedBox(width: 12),
-          Expanded(child: _coordField(
-              'Longitude', _lng.toString(),
-              (v) => setState(() => _lng = double.tryParse(v) ?? _lng))),
-        ]),
+        _gpsStatusBox(),
         const SizedBox(height: 20),
 
         _sectionLabel('Description'),
@@ -167,6 +184,56 @@ class _ReportScreenState extends State<ReportScreen> {
     ),
   );
 
+  Widget _gpsStatusBox() {
+    final ok = _lat != null;
+    final color = ok
+        ? const Color(0xFF4FC3F7)
+        : _locating
+            ? const Color(0xFF90A4AE)
+            : const Color(0xFFEF5350);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C2F3F),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Row(children: [
+        if (_locating)
+          const SizedBox(
+            width: 16, height: 16,
+            child: CircularProgressIndicator(
+                strokeWidth: 2, color: Color(0xFF4FC3F7)),
+          )
+        else
+          Icon(ok ? Icons.location_on : Icons.location_off,
+              color: color, size: 18),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            _locating
+                ? 'Acquiring GPS location...'
+                : ok
+                    ? 'GPS: ${_lat!.toStringAsFixed(4)}, ${_lng!.toStringAsFixed(4)}'
+                    : (_locError ?? 'GPS unavailable'),
+            style: TextStyle(color: color, fontSize: 12.5),
+          ),
+        ),
+        if (!_locating && !ok)
+          TextButton(
+            onPressed: _getLocation,
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text('Retry',
+                style: TextStyle(color: Color(0xFF4FC3F7), fontSize: 12)),
+          ),
+      ]),
+    );
+  }
+
   Widget _sectionLabel(String label) => Padding(
         padding: const EdgeInsets.only(bottom: 10),
         child: Text(label,
@@ -186,15 +253,6 @@ class _ReportScreenState extends State<ReportScreen> {
       TextField(
         keyboardType: TextInputType.number,
         style: const TextStyle(color: Colors.white),
-        onChanged: onChanged,
-        decoration: _dec(label, null),
-      );
-
-  Widget _coordField(String label, String initial, Function(String) onChanged) =>
-      TextField(
-        controller: TextEditingController(text: initial),
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        style: const TextStyle(color: Colors.white, fontSize: 13),
         onChanged: onChanged,
         decoration: _dec(label, null),
       );

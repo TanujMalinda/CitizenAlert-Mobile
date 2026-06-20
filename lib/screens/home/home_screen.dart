@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:geolocator/geolocator.dart';
+import '../../services/location_service.dart';
 import '../../models/alert_model.dart';
 import '../../models/disaster_model.dart';
 import '../../models/crime_model.dart';
@@ -14,6 +14,7 @@ import '../report/crime_report_screen.dart';
 import '../report/traffic_report_screen.dart';
 import '../report/health_report_screen.dart';
 import 'alert_detail_screen.dart';
+import 'alert_tip_sheet.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -63,20 +64,11 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _initLocation() async {
-    try {
-      LocationPermission perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied) {
-        perm = await Geolocator.requestPermission();
-      }
-      if (perm == LocationPermission.whileInUse ||
-          perm == LocationPermission.always) {
-        final pos = await Geolocator.getCurrentPosition();
-        if (mounted) {
-          setState(() =>
-              _userLocation = LatLng(pos.latitude, pos.longitude));
-        }
-      }
-    } catch (_) {}
+    final res = await LocationService.getCurrentLocation();
+    if (mounted && res.ok) {
+      setState(() =>
+          _userLocation = LatLng(res.latitude!, res.longitude!));
+    }
     await _loadAll();
   }
 
@@ -563,6 +555,27 @@ class _HomeScreenState extends State<HomeScreen>
             ),
           ],
 
+          // Send Information / tip button — crime, traffic, health
+          if (isCrime || isTraffic || isHealth) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () => _openTipSheet(a.id, a.title),
+                icon: const Icon(Icons.tips_and_updates, size: 15),
+                label: const Text('I have information',
+                    style: TextStyle(fontSize: 13)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF4FC3F7),
+                  side: const BorderSide(color: Color(0xFF4FC3F7)),
+                  padding: const EdgeInsets.symmetric(vertical: 9),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                ),
+              ),
+            ),
+          ],
+
           // View sighting button for missing
           if (isMissing) ...[
             const SizedBox(height: 10),
@@ -586,6 +599,17 @@ class _HomeScreenState extends State<HomeScreen>
           ],
         ],
       ),
+    );
+  }
+
+  void _openTipSheet(int alertId, String title) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF1C2F3F),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => AlertTipSheet(alertId: alertId, alertTitle: title),
     );
   }
 
