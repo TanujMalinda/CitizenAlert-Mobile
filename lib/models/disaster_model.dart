@@ -11,6 +11,7 @@ class DisasterModel {
   final String? affectedArea;
   final String? evacuationRoutes;
   final String? officialSource;
+  final int    confirmationCount;
   final double latitude;
   final double longitude;
   final double distanceKm;
@@ -27,6 +28,7 @@ class DisasterModel {
     this.affectedArea,
     this.evacuationRoutes,
     this.officialSource,
+    required this.confirmationCount,
     required this.latitude,
     required this.longitude,
     required this.distanceKm,
@@ -44,6 +46,9 @@ class DisasterModel {
         affectedArea:     j['affected_area'],
         evacuationRoutes: j['evacuation_routes'],
         officialSource:   j['official_source'],
+        confirmationCount: (j['confirmation_count'] ?? 1) is int
+                           ? (j['confirmation_count'] ?? 1)
+                           : int.tryParse(j['confirmation_count'].toString()) ?? 1,
         latitude:         (j['latitude'] ?? 0).toDouble(),
         longitude:        (j['longitude'] ?? 0).toDouble(),
         distanceKm:       (j['distance_km'] ?? 0).toDouble(),

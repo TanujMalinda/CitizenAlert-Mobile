@@ -13,6 +13,7 @@ import '../report/report_screen.dart';
 import '../report/crime_report_screen.dart';
 import '../report/traffic_report_screen.dart';
 import '../report/health_report_screen.dart';
+import '../report/disaster_report_screen.dart';
 import 'alert_detail_screen.dart';
 import 'alert_tip_sheet.dart';
 
@@ -72,61 +73,47 @@ class _HomeScreenState extends State<HomeScreen>
     await _loadAll();
   }
 
+  List<T> _parseList<T>(
+    Map<String, dynamic> res,
+    T Function(Map<String, dynamic>) fromJson,
+  ) {
+    final raw = res['data'] ?? res['results'] ?? res['items'] ?? [];
+    if (raw is! List) return [];
+    return raw
+        .whereType<Map<String, dynamic>>()
+        .map(fromJson)
+        .toList();
+  }
+
   Future<void> _loadAll() async {
     if (!mounted) return;
     setState(() { _loading = true; _error = null; });
-    try {
-      final results = await Future.wait([
-        _api.getNearbyAlerts(
-          latitude:  _userLocation.latitude,
-          longitude: _userLocation.longitude,
-          radiusKm:  15,
-        ),
-        _api.getNearbyDisasters(
-          latitude:  _userLocation.latitude,
-          longitude: _userLocation.longitude,
-          radiusKm:  50,
-        ),
-        _api.getNearbyCrimes(
-          latitude:  _userLocation.latitude,
-          longitude: _userLocation.longitude,
-          radiusKm:  5,
-        ),
-        _api.getNearbyTraffic(
-          latitude:  _userLocation.latitude,
-          longitude: _userLocation.longitude,
-          radiusKm:  10,
-        ),
-        _api.getNearbyHealth(
-          latitude:  _userLocation.latitude,
-          longitude: _userLocation.longitude,
-          radiusKm:  100,
-        ),
-      ]);
 
-      if (!mounted) return;
-      setState(() {
-        _missingAlerts  = (results[0]['data'] as List)
-            .map((e) => AlertModel.fromJson(e as Map<String, dynamic>))
-            .toList();
-        _disasterAlerts = (results[1]['data'] as List)
-            .map((e) => DisasterModel.fromJson(e as Map<String, dynamic>))
-            .toList();
-        _crimeAlerts    = (results[2]['data'] as List)
-            .map((e) => CrimeModel.fromJson(e as Map<String, dynamic>))
-            .toList();
-        _trafficAlerts  = (results[3]['data'] as List)
-            .map((e) => TrafficModel.fromJson(e as Map<String, dynamic>))
-            .toList();
-        _healthAlerts   = (results[4]['data'] as List)
-            .map((e) => HealthModel.fromJson(e as Map<String, dynamic>))
-            .toList();
-        _loading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() { _error = 'Could not load alerts'; _loading = false; });
-    }
+    final lat = _userLocation.latitude;
+    final lng = _userLocation.longitude;
+
+    final results = await Future.wait([
+      _api.getNearbyAlerts(latitude: lat, longitude: lng, radiusKm: 15)
+          .catchError((_) => <String, dynamic>{}),
+      _api.getNearbyDisasters(latitude: lat, longitude: lng, radiusKm: 50)
+          .catchError((_) => <String, dynamic>{}),
+      _api.getNearbyCrimes(latitude: lat, longitude: lng, radiusKm: 5)
+          .catchError((_) => <String, dynamic>{}),
+      _api.getNearbyTraffic(latitude: lat, longitude: lng, radiusKm: 10)
+          .catchError((_) => <String, dynamic>{}),
+      _api.getNearbyHealth(latitude: lat, longitude: lng, radiusKm: 100)
+          .catchError((_) => <String, dynamic>{}),
+    ]);
+
+    if (!mounted) return;
+    setState(() {
+      _missingAlerts  = _parseList(results[0], AlertModel.fromJson);
+      _disasterAlerts = _parseList(results[1], DisasterModel.fromJson);
+      _crimeAlerts    = _parseList(results[2], CrimeModel.fromJson);
+      _trafficAlerts  = _parseList(results[3], TrafficModel.fromJson);
+      _healthAlerts   = _parseList(results[4], HealthModel.fromJson);
+      _loading = false;
+    });
   }
 
   Future<void> _logout() async {
@@ -495,6 +482,8 @@ class _HomeScreenState extends State<HomeScreen>
               _chip('${a.distanceKm} km', const Color(0xFF90A4AE)),
             if (isDisaster) ...[
               _chip(a.severity.toUpperCase(), a.severityColor),
+              _chip('${a.confirmationCount} confirms',
+                  const Color(0xFF4FC3F7)),
               _chip('${a.distanceKm} km', const Color(0xFF90A4AE)),
             ],
             if (isCrime)
@@ -534,29 +523,24 @@ class _HomeScreenState extends State<HomeScreen>
             ]),
           ],
 
-          // Traffic confirm button
+          // Confirm Hazard button — traffic & disaster
           if (isTraffic) ...[
             const SizedBox(height: 10),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () => _confirmTraffic(a),
-                icon: const Icon(Icons.thumb_up_outlined, size: 14),
-                label: const Text('Confirm Hazard',
-                    style: TextStyle(fontSize: 13)),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFFFF9800),
-                  side: const BorderSide(color: Color(0xFFFF9800)),
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                ),
-              ),
+            _confirmButton(
+              count: a.confirmationCount,
+              onPressed: () => _confirmTraffic(a),
+            ),
+          ],
+          if (isDisaster) ...[
+            const SizedBox(height: 10),
+            _confirmButton(
+              count: a.confirmationCount,
+              onPressed: () => _confirmDisaster(a),
             ),
           ],
 
-          // Send Information / tip button — crime, traffic, health
-          if (isCrime || isTraffic || isHealth) ...[
+          // Send Information / tip button — crime & health only
+          if (isCrime || isHealth) ...[
             const SizedBox(height: 10),
             SizedBox(
               width: double.infinity,
@@ -613,25 +597,83 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  Future<void> _confirmTraffic(TrafficModel a) async {
-    try {
-      await _api.confirmTrafficHazard(a.id);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Confirmation recorded — thank you!'),
-          backgroundColor: Color(0xFF1C2F3F),
+  // Shared confirm-hazard button (traffic & disaster) — shows current count.
+  Widget _confirmButton({
+    required int count,
+    required VoidCallback onPressed,
+  }) =>
+      SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          onPressed: onPressed,
+          icon: const Icon(Icons.thumb_up_outlined, size: 14),
+          label: Text('Confirm Hazard · $count confirmed',
+              style: const TextStyle(fontSize: 13)),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color(0xFFFF9800),
+            side: const BorderSide(color: Color(0xFFFF9800)),
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8)),
+          ),
         ),
       );
-      setState(() => _selected = null);
-      _loadAll();
+
+  Future<void> _confirmTraffic(TrafficModel a) async {
+    try {
+      final res = await _api.confirmTrafficHazard(a.id);
+      await _afterConfirm(res, a.id, isDisaster: false);
     } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not confirm hazard'),
-            backgroundColor: Color(0xFF1C2F3F)),
-      );
+      _confirmFailed();
     }
+  }
+
+  Future<void> _confirmDisaster(DisasterModel a) async {
+    try {
+      final res = await _api.confirmDisaster(a.id);
+      await _afterConfirm(res, a.id, isDisaster: true);
+    } catch (_) {
+      _confirmFailed();
+    }
+  }
+
+  Future<void> _afterConfirm(
+      Map<String, dynamic> res, int alertId,
+      {required bool isDisaster}) async {
+    if (!mounted) return;
+    final already = res['already_confirmed'] == true;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(already
+            ? 'You have already confirmed this — counted once only.'
+            : 'Confirmation recorded — thank you!'),
+        backgroundColor: const Color(0xFF1C2F3F),
+      ),
+    );
+
+    // Refresh data but KEEP the card open, re-pointing the selection to the
+    // refreshed alert so the confirmation count updates live.
+    await _loadAll();
+    if (!mounted) return;
+    setState(() {
+      if (isDisaster) {
+        for (final d in _disasterAlerts) {
+          if (d.id == alertId) { _selected = d; return; }
+        }
+      } else {
+        for (final t in _trafficAlerts) {
+          if (t.id == alertId) { _selected = t; return; }
+        }
+      }
+    });
+  }
+
+  void _confirmFailed() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Could not confirm hazard'),
+          backgroundColor: Color(0xFF1C2F3F)),
+    );
   }
 
   // ── List tab ───────────────────────────────────────────────────────────────
@@ -855,6 +897,20 @@ class _HomeScreenState extends State<HomeScreen>
                 Navigator.push(context,
                     MaterialPageRoute(
                         builder: (_) => const TrafficReportScreen()))
+                    .then((_) => _loadAll());
+              },
+            ),
+            const SizedBox(height: 10),
+            _reportOption(
+              icon: Icons.warning_amber,
+              color: const Color(0xFFFFA726),
+              title: 'Disaster',
+              subtitle: 'Report flood, landslide, fire, or other hazard',
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context,
+                    MaterialPageRoute(
+                        builder: (_) => const DisasterReportScreen()))
                     .then((_) => _loadAll());
               },
             ),

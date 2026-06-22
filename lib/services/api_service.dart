@@ -2,8 +2,10 @@ import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://10.0.2.2:8000/api';
-  // 10.0.2.2 = localhost from Android emulator
+  // Using adb reverse tunnel (USB) — bypasses university WiFi client isolation.
+  // Tunnel set up with: adb reverse tcp:8000 tcp:8000
+  // The phone's localhost:8000 is forwarded to the laptop's backend over USB.
+  static const String baseUrl = 'http://localhost:8000/api';
 
   final Dio _dio;
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
@@ -109,6 +111,19 @@ Future<Map<String, dynamic>> getNearbyDisasters({
 
 Future<Map<String, dynamic>> getDisasterAlert(int alertId) async {
   final res = await _dio.get('/disaster-alerts/$alertId');
+  return res.data;
+}
+
+/// Citizen reports a disaster — routed to authority review (not auto-verified).
+Future<Map<String, dynamic>> submitDisasterReport(
+    Map<String, dynamic> data) async {
+  final res = await _dio.post('/disaster-alerts/report', data: data);
+  return res.data;
+}
+
+/// Citizen confirms an existing disaster — increments its confirmation count.
+Future<Map<String, dynamic>> confirmDisaster(int alertId) async {
+  final res = await _dio.post('/disaster-alerts/$alertId/confirm', data: {});
   return res.data;
 }
 
