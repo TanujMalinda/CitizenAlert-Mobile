@@ -31,9 +31,10 @@ class _LoginScreenState extends State<LoginScreen> {
       );
     } on DioException catch (e) {
       setState(() {
-        _error =
-            e.response?.data?['detail'] ??
-            'Login failed. Check your credentials.';
+        _error = e.response?.data?['detail'] ??
+            (e.response == null
+                ? 'Cannot reach server. Is the backend running?'
+                : 'Login failed. Check your credentials.');
       });
     } finally {
       setState(() => _loading = false);

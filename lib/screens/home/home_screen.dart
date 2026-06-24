@@ -8,12 +8,15 @@ import '../../models/crime_model.dart';
 import '../../models/traffic_model.dart';
 import '../../models/health_model.dart';
 import '../../services/api_service.dart';
+import '../../services/notification_service.dart';
+import '../../services/notification_poller.dart';
 import '../auth/login_screen.dart';
 import '../report/report_screen.dart';
 import '../report/crime_report_screen.dart';
 import '../report/traffic_report_screen.dart';
 import '../report/health_report_screen.dart';
 import '../report/disaster_report_screen.dart';
+import '../notifications/notifications_screen.dart';
 import 'alert_detail_screen.dart';
 import 'alert_tip_sheet.dart';
 
@@ -51,17 +54,76 @@ class _HomeScreenState extends State<HomeScreen>
   // Selected marker
   dynamic _selected;
 
+  // Notifications
+  late final NotificationPoller _poller;
+  int _unread = 0;
+  final Set<String> _knownAlertKeys = {};
+  bool _firstAlertLoad = true;
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    _initNotifications();
     _initLocation();
   }
 
   @override
   void dispose() {
+    _poller.stop();
     _tabController.dispose();
     super.dispose();
+  }
+
+  Future<void> _initNotifications() async {
+    await NotificationService.instance.init();
+    NotificationService.instance.onTap = (_) => _openNotifications();
+    _poller = NotificationPoller(_api);
+    _poller.onChanged = _refreshUnread;
+    await _poller.start();
+    _refreshUnread();
+  }
+
+  Future<void> _refreshUnread() async {
+    try {
+      final n = await _api.getUnreadCount();
+      if (mounted) setState(() => _unread = n);
+    } catch (_) {/* offline — ignore */}
+  }
+
+  void _openNotifications() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const NotificationsScreen()),
+    ).then((_) => _refreshUnread());
+  }
+
+  // Fire a local notification for newly-appeared nearby alerts (not on first
+  // load, to avoid notifying for everything already there).
+  void _notifyNewNearby() {
+    final current = <String, String>{}; // key -> "Title"
+    for (final a in _missingAlerts) { current['m${a.id}'] = a.personName; }
+    for (final a in _disasterAlerts) { current['d${a.id}'] = a.title; }
+    for (final a in _crimeAlerts)    { current['c${a.id}'] = a.title; }
+    for (final a in _trafficAlerts)  { current['t${a.id}'] = a.title; }
+    for (final a in _healthAlerts)   { current['h${a.id}'] = a.title; }
+
+    if (_firstAlertLoad) {
+      _knownAlertKeys.addAll(current.keys);
+      _firstAlertLoad = false;
+      return;
+    }
+
+    for (final entry in current.entries) {
+      if (!_knownAlertKeys.contains(entry.key)) {
+        _knownAlertKeys.add(entry.key);
+        NotificationService.instance.show(
+          id: entry.key.hashCode & 0x7fffffff,
+          title: 'New alert near you',
+          body: entry.value,
+        );
+      }
+    }
   }
 
   Future<void> _initLocation() async {
@@ -114,6 +176,8 @@ class _HomeScreenState extends State<HomeScreen>
       _healthAlerts   = _parseList(results[4], HealthModel.fromJson);
       _loading = false;
     });
+
+    _notifyNewNearby();
   }
 
   Future<void> _logout() async {
@@ -173,11 +237,47 @@ class _HomeScreenState extends State<HomeScreen>
           icon: const Icon(Icons.refresh, color: Color(0xFF4FC3F7)),
           onPressed: _loadAll,
         ),
+        _notificationBell(),
         IconButton(
           icon: const Icon(Icons.logout, color: Color(0xFF90A4AE)),
           onPressed: _logout,
         ),
       ]),
+    );
+  }
+
+  Widget _notificationBell() {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        IconButton(
+          icon: const Icon(Icons.notifications_outlined,
+              color: Color(0xFF4FC3F7)),
+          onPressed: _openNotifications,
+        ),
+        if (_unread > 0)
+          Positioned(
+            right: 4,
+            top: 4,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEF5350),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFF0D1B2A), width: 1.5),
+              ),
+              constraints: const BoxConstraints(minWidth: 16),
+              child: Text(
+                _unread > 99 ? '99+' : '$_unread',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold),
+              ),
+            ),
+          ),
+      ],
     );
   }
 

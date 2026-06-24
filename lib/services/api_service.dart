@@ -55,14 +55,22 @@ class ApiService {
   Future<String?> getUserRole() => _storage.read(key: 'user_role');
 
   /// Returns true only if a token exists AND the server accepts it.
+  /// On network errors the token is preserved so the user doesn't have to
+  /// re-login just because the backend was temporarily unreachable.
   Future<bool> isTokenValid() async {
     final token = await _storage.read(key: 'jwt_token');
     if (token == null) return false;
     try {
       await _dio.get('/auth/me');
       return true;
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        // Token is genuinely expired or invalid — clear it.
+        await _storage.deleteAll();
+      }
+      // Any other status (network down, 500, etc.) — keep the token and show login.
+      return false;
     } catch (_) {
-      await _storage.deleteAll();
       return false;
     }
   }
@@ -218,5 +226,32 @@ Future<Map<String, dynamic>> confirmDisaster(int alertId) async {
   Future<Map<String, dynamic>> getAlertResponses(int alertId) async {
     final res = await _dio.get('/alerts/$alertId/responses');
     return res.data;
+  }
+
+  // ── Notifications ───────────────────────────────────────────────────────────
+
+  /// Fetch this user's notifications. Pass [sinceId] to only get newer ones.
+  Future<Map<String, dynamic>> getNotifications({
+    int sinceId = 0,
+    bool unreadOnly = false,
+  }) async {
+    final res = await _dio.get('/notifications/', queryParameters: {
+      'since_id': sinceId,
+      'unread_only': unreadOnly,
+    });
+    return res.data;
+  }
+
+  Future<int> getUnreadCount() async {
+    final res = await _dio.get('/notifications/unread-count');
+    return (res.data['unread'] ?? 0) as int;
+  }
+
+  Future<void> markNotificationRead(int id) async {
+    await _dio.post('/notifications/$id/read', data: {});
+  }
+
+  Future<void> markAllNotificationsRead() async {
+    await _dio.post('/notifications/read-all', data: {});
   }
 }
