@@ -26,10 +26,10 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen>
-    with SingleTickerProviderStateMixin {
-  final _api         = ApiService();
-  late TabController _tabController;
+class _HomeScreenState extends State<HomeScreen> {
+  final _api = ApiService();
+  // 0 = Map, 1 = Alerts list, 2 = Review (authority only)
+  int _navIndex = 0;
 
   // Data
   List<AlertModel>   _missingAlerts  = [];
@@ -60,18 +60,80 @@ class _HomeScreenState extends State<HomeScreen>
   final Set<String> _knownAlertKeys = {};
   bool _firstAlertLoad = true;
 
+  // Authority review queue (role-gated)
+  bool _isAuthority = false;
+  List<Map<String, dynamic>> _pendingReviews = [];
+  bool _reviewLoading = false;
+  int? _reviewBusyId; // alert id currently being verified/rejected
+
+  // Only crime & health require authority verification.
+  static const _reviewableTypes = {'crime', 'health'};
+
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _initRole();
     _initNotifications();
     _initLocation();
+  }
+
+  Future<void> _initRole() async {
+    final role = await _api.getUserRole();
+    if (role == 'authority' && mounted) {
+      setState(() => _isAuthority = true);
+      _loadPendingReviews();
+    }
+  }
+
+  Future<void> _loadPendingReviews() async {
+    if (!_isAuthority) return;
+    setState(() => _reviewLoading = true);
+    try {
+      final res = await _api.getPendingReviews();
+      final raw = (res['data'] as List?) ?? [];
+      final list = raw
+          .whereType<Map<String, dynamic>>()
+          .where((a) => _reviewableTypes.contains(a['alert_type']))
+          .toList();
+      if (mounted) setState(() => _pendingReviews = list);
+    } catch (_) {
+      if (mounted) setState(() => _pendingReviews = []);
+    } finally {
+      if (mounted) setState(() => _reviewLoading = false);
+    }
+  }
+
+  Future<void> _reviewAction(
+      Map<String, dynamic> item, String action) async {
+    final id = item['id'] as int;
+    setState(() => _reviewBusyId = id);
+    try {
+      await _api.reviewAlert(id, action);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(action == 'verify'
+              ? 'Verified — now visible to citizens'
+              : 'Rejected — removed from public feed'),
+          backgroundColor: const Color(0xFF1C2F3F),
+        ),
+      );
+      await _loadPendingReviews();
+      await _loadAll(); // newly-verified alerts appear on the map too
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Action failed — try again'),
+            backgroundColor: Color(0xFF1C2F3F)),
+      );
+    } finally {
+      if (mounted) setState(() => _reviewBusyId = null);
+    }
   }
 
   @override
   void dispose() {
     _poller.stop();
-    _tabController.dispose();
     super.dispose();
   }
 
@@ -197,11 +259,15 @@ class _HomeScreenState extends State<HomeScreen>
       backgroundColor: const Color(0xFF0D1B2A),
       body: Column(children: [
         _topBar(),
-        _filterChipsRow(),
-        Expanded(child: TabBarView(
-          controller: _tabController,
-          physics: const NeverScrollableScrollPhysics(),
-          children: [_mapTab(), _listTab()],
+        // Filter chips only apply to the citizen map/list tabs.
+        if (_navIndex < 2) _filterChipsRow(),
+        Expanded(child: IndexedStack(
+          index: _navIndex,
+          children: [
+            _mapTab(),
+            _listTab(),
+            if (_isAuthority) _reviewTab(),
+          ],
         )),
       ]),
       bottomNavigationBar: _bottomNav(),
@@ -222,20 +288,22 @@ class _HomeScreenState extends State<HomeScreen>
             style: TextStyle(color: Colors.white,
                 fontSize: 18, fontWeight: FontWeight.bold)),
         const Spacer(),
-        IconButton(
-          icon: Icon(
-            _tabController.index == 0 ? Icons.map : Icons.list,
-            color: const Color(0xFF4FC3F7),
+        if (_navIndex < 2)
+          IconButton(
+            icon: Icon(
+              _navIndex == 0 ? Icons.map : Icons.list,
+              color: const Color(0xFF4FC3F7),
+            ),
+            onPressed: () {
+              setState(() => _navIndex = _navIndex == 0 ? 1 : 0);
+            },
           ),
-          onPressed: () {
-            setState(() {
-              _tabController.index = _tabController.index == 0 ? 1 : 0;
-            });
-          },
-        ),
         IconButton(
           icon: const Icon(Icons.refresh, color: Color(0xFF4FC3F7)),
-          onPressed: _loadAll,
+          onPressed: () {
+            _loadAll();
+            if (_isAuthority) _loadPendingReviews();
+          },
         ),
         _notificationBell(),
         IconButton(
@@ -867,7 +935,7 @@ class _HomeScreenState extends State<HomeScreen>
       onTap: () {
         setState(() {
           _selected = a.original;
-          _tabController.index = 0;
+          _navIndex = 0;
         });
       },
       child: Container(
@@ -919,6 +987,142 @@ class _HomeScreenState extends State<HomeScreen>
             ],
           ),
         ]),
+      ),
+    );
+  }
+
+  // ── Authority review tab ─────────────────────────────────────────────────────
+  Widget _reviewTab() {
+    if (_reviewLoading) {
+      return const Center(
+          child: CircularProgressIndicator(color: Color(0xFF4FC3F7)));
+    }
+    if (_pendingReviews.isEmpty) {
+      return RefreshIndicator(
+        onRefresh: _loadPendingReviews,
+        color: const Color(0xFF4FC3F7),
+        child: ListView(
+          children: const [
+            SizedBox(height: 120),
+            Icon(Icons.task_alt, color: Color(0xFF66BB6A), size: 48),
+            SizedBox(height: 12),
+            Center(
+              child: Text('No alerts pending review',
+                  style: TextStyle(color: Color(0xFF90A4AE), fontSize: 15)),
+            ),
+            SizedBox(height: 4),
+            Center(
+              child: Text('Crime & health reports appear here for verification',
+                  style: TextStyle(color: Color(0xFF4A6070), fontSize: 12)),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _loadPendingReviews,
+      color: const Color(0xFF4FC3F7),
+      child: ListView.builder(
+        padding: const EdgeInsets.all(12),
+        itemCount: _pendingReviews.length,
+        itemBuilder: (_, i) => _reviewCard(_pendingReviews[i]),
+      ),
+    );
+  }
+
+  Widget _reviewCard(Map<String, dynamic> a) {
+    final type     = (a['alert_type'] ?? '').toString();
+    final isCrime  = type == 'crime';
+    final color    = isCrime ? const Color(0xFFEF5350) : const Color(0xFF66BB6A);
+    final icon     = isCrime ? Icons.local_police : Icons.local_hospital;
+    final severity = (a['severity'] ?? '').toString();
+    final busy     = _reviewBusyId == a['id'];
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C2F3F),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Container(
+              width: 40, height: 40,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.15),
+                shape: BoxShape.circle,
+                border: Border.all(color: color, width: 0.5),
+              ),
+              child: Icon(icon, color: color, size: 22),
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(a['title']?.toString() ?? '',
+                    style: const TextStyle(color: Colors.white,
+                        fontWeight: FontWeight.bold, fontSize: 14)),
+                Text('${a['district'] ?? '—'} · '
+                     'by ${a['reporter_name'] ?? 'Anonymous'}',
+                    style: const TextStyle(
+                        color: Color(0xFF90A4AE), fontSize: 12)),
+              ],
+            )),
+          ]),
+          if ((a['description']?.toString() ?? '').isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(a['description'].toString(),
+                maxLines: 3, overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Color(0xFFB0BEC5), fontSize: 12.5)),
+          ],
+          const SizedBox(height: 8),
+          Wrap(spacing: 6, runSpacing: 4, children: [
+            _chip(type.toUpperCase(), color),
+            if (severity.isNotEmpty)
+              _chip(severity.toUpperCase(), const Color(0xFFFF9800)),
+            _chip('PENDING REVIEW', const Color(0xFF90A4AE)),
+          ]),
+          const SizedBox(height: 12),
+          Row(children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: busy ? null : () => _reviewAction(a, 'reject'),
+                icon: const Icon(Icons.close, size: 16),
+                label: const Text('Reject', style: TextStyle(fontSize: 13)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFEF5350),
+                  side: const BorderSide(color: Color(0xFFEF5350)),
+                  padding: const EdgeInsets.symmetric(vertical: 9),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: busy ? null : () => _reviewAction(a, 'verify'),
+                icon: busy
+                    ? const SizedBox(width: 14, height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.check, size: 16),
+                label: const Text('Verify', style: TextStyle(fontSize: 13)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF66BB6A),
+                  foregroundColor: const Color(0xFF0D1B2A),
+                  padding: const EdgeInsets.symmetric(vertical: 9),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                ),
+              ),
+            ),
+          ]),
+        ],
       ),
     );
   }
@@ -1080,19 +1284,30 @@ class _HomeScreenState extends State<HomeScreen>
   Widget _bottomNav() {
     return NavigationBar(
       backgroundColor: const Color(0xFF1C2F3F),
-      selectedIndex: _tabController.index,
+      selectedIndex: _navIndex,
       onDestinationSelected: (i) {
-        setState(() => _tabController.index = i);
+        setState(() => _navIndex = i);
       },
-      destinations: const [
-        NavigationDestination(
+      destinations: [
+        const NavigationDestination(
             icon: Icon(Icons.map_outlined),
             selectedIcon: Icon(Icons.map),
             label: 'Map'),
-        NavigationDestination(
+        const NavigationDestination(
             icon: Icon(Icons.list_outlined),
             selectedIcon: Icon(Icons.list),
             label: 'Alerts'),
+        if (_isAuthority)
+          NavigationDestination(
+            icon: Badge(
+              isLabelVisible: _pendingReviews.isNotEmpty,
+              label: Text('${_pendingReviews.length}'),
+              backgroundColor: const Color(0xFFEF5350),
+              child: const Icon(Icons.fact_check_outlined),
+            ),
+            selectedIcon: const Icon(Icons.fact_check),
+            label: 'Review',
+          ),
       ],
     );
   }

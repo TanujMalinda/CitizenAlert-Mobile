@@ -254,4 +254,24 @@ Future<Map<String, dynamic>> confirmDisaster(int alertId) async {
   Future<void> markAllNotificationsRead() async {
     await _dio.post('/notifications/read-all', data: {});
   }
+
+  // ── Authority Review (authority role only) ───────────────────────────────────
+
+  /// Alerts awaiting Tier-3 authority review. Returns all pending types;
+  /// callers filter to the categories they handle (crime / health).
+  Future<Map<String, dynamic>> getPendingReviews() async {
+    final res = await _dio.get('/authority/pending');
+    return res.data;
+  }
+
+  /// Verify or reject a pending alert. [action] is 'verify' or 'reject'.
+  Future<Map<String, dynamic>> reviewAlert(
+    int alertId,
+    String action, {
+    String? notes,
+  }) async {
+    final res = await _dio.post('/authority/alerts/$alertId/review',
+        data: {'action': action, 'notes': notes});
+    return res.data;
+  }
 }
