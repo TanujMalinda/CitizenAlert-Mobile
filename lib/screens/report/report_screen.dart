@@ -1,6 +1,11 @@
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:latlong2/latlong.dart';
 import '../../services/api_service.dart';
 import '../../services/location_service.dart';
+import 'location_picker_screen.dart';
 
 class ReportScreen extends StatefulWidget {
   const ReportScreen({super.key});
@@ -17,13 +22,20 @@ class _ReportScreenState extends State<ReportScreen> {
 
   int?    _age;
   String  _gender     = 'male';
+  // Selected last-seen location (null until the user picks it on the map).
   double? _lat;
   double? _lng;
-  bool    _locating   = true;
-  String? _locError;
+  // Current GPS — used only to centre the map picker initially.
+  double? _gpsLat;
+  double? _gpsLng;
   bool    _submitting = false;
   String? _error;
   bool    _success    = false;
+
+  // Photo of the missing person (optional)
+  File?   _photoFile;
+  String? _photoDataUri; // "data:image/jpeg;base64,..." sent as photo_url
+  final ImagePicker _picker = ImagePicker();
 
   @override
   void initState() {
@@ -32,15 +44,96 @@ class _ReportScreenState extends State<ReportScreen> {
   }
 
   Future<void> _getLocation() async {
-    setState(() { _locating = true; _locError = null; });
+    // Fetch current GPS only to seed the map picker's starting position.
     final res = await LocationService.getCurrentLocation();
     if (!mounted) return;
     setState(() {
-      _lat      = res.latitude;
-      _lng      = res.longitude;
-      _locError = res.error;
-      _locating = false;
+      _gpsLat = res.latitude;
+      _gpsLng = res.longitude;
     });
+  }
+
+  Future<void> _pickLocation() async {
+    final LatLng? initial = (_lat != null && _lng != null)
+        ? LatLng(_lat!, _lng!)
+        : (_gpsLat != null && _gpsLng != null)
+            ? LatLng(_gpsLat!, _gpsLng!)
+            : null;
+    final result = await Navigator.push<LatLng>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => LocationPickerScreen(
+          initial: initial,
+          title: 'Select Last Seen Location',
+        ),
+      ),
+    );
+    if (result != null && mounted) {
+      setState(() {
+        _lat = result.latitude;
+        _lng = result.longitude;
+        _error = null;
+      });
+    }
+  }
+
+  Future<void> _pickImage(ImageSource source) async {
+    try {
+      final picked = await _picker.pickImage(
+        source: source,
+        maxWidth: 800,      // resize down — keeps the base64 small
+        maxHeight: 800,
+        imageQuality: 55,   // compress
+      );
+      if (picked == null) return;
+      final bytes = await picked.readAsBytes();
+      final b64 = base64Encode(bytes);
+      if (!mounted) return;
+      setState(() {
+        _photoFile = File(picked.path);
+        _photoDataUri = 'data:image/jpeg;base64,$b64';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = 'Could not load image');
+    }
+  }
+
+  void _showPhotoSourceSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1C2F3F),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const SizedBox(height: 8),
+          ListTile(
+            leading: const Icon(Icons.photo_camera, color: Color(0xFF4FC3F7)),
+            title: const Text('Take a photo',
+                style: TextStyle(color: Colors.white)),
+            onTap: () { Navigator.pop(ctx); _pickImage(ImageSource.camera); },
+          ),
+          ListTile(
+            leading: const Icon(Icons.photo_library, color: Color(0xFF4FC3F7)),
+            title: const Text('Choose from gallery',
+                style: TextStyle(color: Colors.white)),
+            onTap: () { Navigator.pop(ctx); _pickImage(ImageSource.gallery); },
+          ),
+          if (_photoFile != null)
+            ListTile(
+              leading: const Icon(Icons.delete_outline, color: Color(0xFFEF5350)),
+              title: const Text('Remove photo',
+                  style: TextStyle(color: Color(0xFFEF5350))),
+              onTap: () {
+                Navigator.pop(ctx);
+                setState(() { _photoFile = null; _photoDataUri = null; });
+              },
+            ),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
   }
 
   Future<void> _submit() async {
@@ -53,7 +146,7 @@ class _ReportScreenState extends State<ReportScreen> {
       return;
     }
     if (_lat == null || _lng == null) {
-      setState(() => _error = 'Location not available — please enable GPS');
+      setState(() => _error = 'Please select the last seen location on the map');
       return;
     }
     setState(() { _submitting = true; _error = null; });
@@ -67,6 +160,7 @@ class _ReportScreenState extends State<ReportScreen> {
         'age':                    _age,
         'gender':                 _gender,
         'district':               _districtCtrl.text.trim(),
+        'photo_url':              _photoDataUri,
       });
       setState(() { _success = true; _submitting = false; });
     } catch (e) {
@@ -130,6 +224,8 @@ class _ReportScreenState extends State<ReportScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _sectionLabel('Person details'),
+        _photoPicker(),
+        const SizedBox(height: 12),
         _field('Full name *', _nameCtrl, Icons.person_outline),
         const SizedBox(height: 12),
         Row(children: [
@@ -146,7 +242,7 @@ class _ReportScreenState extends State<ReportScreen> {
         const SizedBox(height: 12),
         _field('District', _districtCtrl, Icons.map_outlined),
         const SizedBox(height: 12),
-        _gpsStatusBox(),
+        _locationBox(),
         const SizedBox(height: 20),
 
         _sectionLabel('Description'),
@@ -184,53 +280,103 @@ class _ReportScreenState extends State<ReportScreen> {
     ),
   );
 
-  Widget _gpsStatusBox() {
-    final ok = _lat != null;
-    final color = ok
-        ? const Color(0xFF4FC3F7)
-        : _locating
-            ? const Color(0xFF90A4AE)
-            : const Color(0xFFEF5350);
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1C2F3F),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withValues(alpha: 0.4)),
-      ),
-      child: Row(children: [
-        if (_locating)
-          const SizedBox(
-            width: 16, height: 16,
-            child: CircularProgressIndicator(
-                strokeWidth: 2, color: Color(0xFF4FC3F7)),
-          )
-        else
-          Icon(ok ? Icons.location_on : Icons.location_off,
-              color: color, size: 18),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            _locating
-                ? 'Acquiring GPS location...'
-                : ok
-                    ? 'GPS: ${_lat!.toStringAsFixed(4)}, ${_lng!.toStringAsFixed(4)}'
-                    : (_locError ?? 'GPS unavailable'),
-            style: TextStyle(color: color, fontSize: 12.5),
+  Widget _photoPicker() {
+    return GestureDetector(
+      onTap: _showPhotoSourceSheet,
+      child: Container(
+        height: 160,
+        decoration: BoxDecoration(
+          color: const Color(0xFF1C2F3F),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: _photoFile != null
+                ? const Color(0xFF4FC3F7)
+                : const Color(0xFF2A3F52),
+            width: _photoFile != null ? 1.5 : 0.5,
           ),
         ),
-        if (!_locating && !ok)
-          TextButton(
-            onPressed: _getLocation,
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              minimumSize: Size.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        clipBehavior: Clip.antiAlias,
+        child: _photoFile != null
+            ? Stack(fit: StackFit.expand, children: [
+                Image.file(_photoFile!, fit: BoxFit.cover),
+                Positioned(
+                  top: 8, right: 8,
+                  child: Container(
+                    decoration: const BoxDecoration(
+                      color: Colors.black54, shape: BoxShape.circle),
+                    child: IconButton(
+                      icon: const Icon(Icons.edit, color: Colors.white, size: 18),
+                      onPressed: _showPhotoSourceSheet,
+                    ),
+                  ),
+                ),
+              ])
+            : Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: const [
+                  Icon(Icons.add_a_photo_outlined,
+                      color: Color(0xFF4FC3F7), size: 34),
+                  SizedBox(height: 8),
+                  Text('Add a photo of the person',
+                      style: TextStyle(color: Color(0xFF90A4AE), fontSize: 13)),
+                  SizedBox(height: 2),
+                  Text('Camera or gallery (optional)',
+                      style: TextStyle(color: Color(0xFF4A6070), fontSize: 11)),
+                ],
+              ),
+      ),
+    );
+  }
+
+  Widget _locationBox() {
+    final ok = _lat != null && _lng != null;
+    final color = ok ? const Color(0xFF4FC3F7) : const Color(0xFF90A4AE);
+    return GestureDetector(
+      onTap: _pickLocation,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1C2F3F),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+              color: ok ? color : const Color(0xFF2A3F52),
+              width: ok ? 1.2 : 0.5),
+        ),
+        child: Row(children: [
+          Icon(ok ? Icons.location_on : Icons.add_location_alt_outlined,
+              color: const Color(0xFF4FC3F7), size: 22),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  ok ? 'Last seen location set' : 'Select last seen location *',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  ok
+                      ? '${_lat!.toStringAsFixed(5)}, ${_lng!.toStringAsFixed(5)}'
+                      : 'Tap to choose the spot on the map',
+                  style: const TextStyle(
+                      color: Color(0xFF90A4AE), fontSize: 12),
+                ),
+              ],
             ),
-            child: const Text('Retry',
-                style: TextStyle(color: Color(0xFF4FC3F7), fontSize: 12)),
           ),
-      ]),
+          Text(ok ? 'Change' : 'Select',
+              style: const TextStyle(
+                  color: Color(0xFF4FC3F7),
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.bold)),
+          const SizedBox(width: 4),
+          const Icon(Icons.chevron_right, color: Color(0xFF4FC3F7), size: 18),
+        ]),
+      ),
     );
   }
 

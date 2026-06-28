@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
 import '../../services/api_service.dart';
 import '../../services/location_service.dart';
+import 'location_picker_screen.dart';
 
 class TrafficReportScreen extends StatefulWidget {
   const TrafficReportScreen({super.key});
@@ -65,6 +67,27 @@ class _TrafficReportScreenState extends State<TrafficReportScreen> {
     });
   }
 
+  Future<void> _pickLocation() async {
+    final LatLng? initial = (_latitude != null && _longitude != null)
+        ? LatLng(_latitude!, _longitude!)
+        : null;
+    final result = await Navigator.push<LatLng>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => LocationPickerScreen(
+          initial: initial,
+          title: 'Select Hazard Location',
+        ),
+      ),
+    );
+    if (result != null && mounted) {
+      setState(() {
+        _latitude = result.latitude;
+        _longitude = result.longitude;
+      });
+    }
+  }
+
   Widget _gpsStatusBox() {
     final ok = _latitude != null;
     final color = ok
@@ -79,38 +102,63 @@ class _TrafficReportScreenState extends State<TrafficReportScreen> {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: color.withValues(alpha: 0.4)),
       ),
-      child: Row(children: [
-        if (_locating)
-          const SizedBox(
-            width: 16, height: 16,
-            child: CircularProgressIndicator(
-                strokeWidth: 2, color: Color(0xFF4FC3F7)),
-          )
-        else
-          Icon(ok ? Icons.location_on : Icons.location_off,
-              color: color, size: 18),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            _locating
-                ? 'Acquiring GPS location...'
-                : ok
-                    ? 'GPS: ${_latitude!.toStringAsFixed(4)}, ${_longitude!.toStringAsFixed(4)}'
-                    : (_locError ?? 'GPS unavailable'),
-            style: TextStyle(color: color, fontSize: 12.5),
-          ),
-        ),
-        if (!_locating && !ok)
-          TextButton(
-            onPressed: _getLocation,
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              minimumSize: Size.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      child: Column(children: [
+        Row(children: [
+          if (_locating)
+            const SizedBox(
+              width: 16, height: 16,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: Color(0xFF4FC3F7)),
+            )
+          else
+            Icon(ok ? Icons.location_on : Icons.location_off,
+                color: color, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              _locating
+                  ? 'Acquiring GPS location...'
+                  : ok
+                      ? 'Location: ${_latitude!.toStringAsFixed(4)}, ${_longitude!.toStringAsFixed(4)}'
+                      : (_locError ?? 'GPS unavailable — pick on map'),
+              style: TextStyle(color: color, fontSize: 12.5),
             ),
-            child: const Text('Retry',
-                style: TextStyle(color: Color(0xFF4FC3F7), fontSize: 12)),
           ),
+        ]),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: _locating ? null : _getLocation,
+              icon: const Icon(Icons.my_location, size: 15),
+              label: const Text('Use my location',
+                  style: TextStyle(fontSize: 12)),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF4FC3F7),
+                side: const BorderSide(color: Color(0xFF2A3F52)),
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8)),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: _pickLocation,
+              icon: const Icon(Icons.map, size: 15),
+              label: const Text('Select on map',
+                  style: TextStyle(fontSize: 12)),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF4FC3F7),
+                side: const BorderSide(color: Color(0xFF2A3F52)),
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8)),
+              ),
+            ),
+          ),
+        ]),
       ]),
     );
   }

@@ -4,6 +4,9 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <!-- Internet — required to reach the CitizenAlert backend API -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Camera — optional, for capturing a missing-person photo -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
 
     <application
         android:label="CitizenAlert"

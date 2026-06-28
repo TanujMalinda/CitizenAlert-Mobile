@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import '../../services/location_service.dart';
 import '../../models/alert_model.dart';
@@ -765,6 +767,331 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // ── Alert details bottom sheet ───────────────────────────────────────────────
+  void _showAlertDetails(dynamic a) {
+    final isMissing  = a is AlertModel;
+    final isDisaster = a is DisasterModel;
+    final isCrime    = a is CrimeModel;
+    final isTraffic  = a is TrafficModel;
+    final isHealth   = a is HealthModel;
+
+    final Color color;
+    final IconData icon;
+    final String title;
+    final String badge;
+    final String description;
+    String? photoUrl;
+    final rows = <Widget>[];
+
+    if (isMissing) {
+      color = a.severityColor; icon = Icons.person_search;
+      title = a.personName; badge = 'MISSING PERSON';
+      description = a.title;
+      photoUrl = a.photoUrl;
+      if (a.age != null) rows.add(_detailRow(Icons.cake, 'Age', '${a.age}'));
+      if (a.gender != null) rows.add(_detailRow(Icons.wc, 'Gender', a.gender!));
+      if (a.lastSeenLocationDesc != null) {
+        rows.add(_detailRow(Icons.place, 'Last seen', a.lastSeenLocationDesc!));
+      }
+      rows.add(_detailRow(Icons.verified_user, 'TVM confidence',
+          '${(a.confidenceScore * 100).toInt()}%'));
+      if (a.cctv) rows.add(_detailRow(Icons.videocam, 'CCTV', 'Corroborated'));
+    } else if (isDisaster) {
+      color = a.hazardColor; icon = a.hazardIcon;
+      title = a.title; badge = a.hazardType.toUpperCase();
+      description = a.description;
+      if (a.affectedArea != null) {
+        rows.add(_detailRow(Icons.map, 'Affected area', a.affectedArea!));
+      }
+      if (a.evacuationRoutes != null) {
+        rows.add(_detailRow(Icons.directions, 'Evacuation', a.evacuationRoutes!));
+      }
+      rows.add(_detailRow(Icons.thumb_up, 'Confirmations',
+          '${a.confirmationCount}'));
+      if (a.officialSource != null) {
+        rows.add(_detailRow(Icons.source, 'Source', a.officialSource!));
+      }
+    } else if (isCrime) {
+      color = a.incidentColor; icon = a.incidentIcon;
+      title = a.title; badge = a.incidentType.replaceAll('_', ' ').toUpperCase();
+      description = a.description;
+      rows.add(_detailRow(
+          a.tvmStatus == 'verified' ? Icons.verified : Icons.pending,
+          'Status', a.tvmStatus == 'verified' ? 'Verified' : 'Under review'));
+      if (a.suspectDescription != null) {
+        rows.add(_detailRow(Icons.person, 'Suspect', a.suspectDescription!));
+      }
+      if (a.policeCase != null) {
+        rows.add(_detailRow(Icons.badge, 'Police case', a.policeCase!));
+      }
+    } else if (isTraffic) {
+      color = a.hazardColor; icon = a.hazardIcon;
+      title = a.title; badge = a.hazardType.replaceAll('_', ' ').toUpperCase();
+      description = a.description;
+      if (a.roadSegment != null) {
+        rows.add(_detailRow(Icons.add_road, 'Road', a.roadSegment!));
+      }
+      rows.add(_detailRow(Icons.thumb_up, 'Confirmations',
+          '${a.confirmationCount}'));
+      if (a.expectedClearTime != null) {
+        rows.add(_detailRow(Icons.schedule, 'Expected clear',
+            a.expectedClearTime!));
+      }
+    } else if (isHealth) {
+      color = a.diseaseColor; icon = a.diseaseIcon;
+      title = a.title; badge = a.diseaseType.replaceAll('_', ' ').toUpperCase();
+      description = a.description;
+      if (a.caseCount != null) {
+        rows.add(_detailRow(Icons.coronavirus, 'Cases', '${a.caseCount}'));
+      }
+      if (a.preventionProtocols != null) {
+        rows.add(_detailRow(Icons.health_and_safety, 'Prevention',
+            a.preventionProtocols!));
+      }
+      if (a.healthFacility != null) {
+        rows.add(_detailRow(Icons.local_hospital, 'Facility',
+            a.healthFacility!));
+      }
+    } else {
+      return;
+    }
+
+    // Common rows (AlertModel/missing has no `district` field)
+    if (!isMissing) {
+      rows.add(_detailRow(Icons.location_city, 'District', a.district ?? '—'));
+    }
+    rows.add(_detailRow(Icons.near_me, 'Distance',
+        '${a.distanceKm.toStringAsFixed(1)} km away'));
+    if (a.severity != null && (a.severity as String).isNotEmpty) {
+      rows.add(_detailRow(Icons.priority_high, 'Severity',
+          (a.severity as String).toUpperCase()));
+    }
+    if (a.createdAt != null && (a.createdAt as String).isNotEmpty) {
+      rows.add(_detailRow(Icons.access_time, 'Reported',
+          _fmtDate(a.createdAt as String)));
+    }
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF1C2F3F),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.72,
+        minChildSize: 0.45,
+        maxChildSize: 0.95,
+        builder: (_, scrollCtrl) => Column(
+          children: [
+            // Scrollable info section
+            Expanded(
+              child: SingleChildScrollView(
+                controller: scrollCtrl,
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 36, height: 4,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF2A3F52),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(children: [
+                      Container(
+                        width: 48, height: 48,
+                        decoration: BoxDecoration(
+                          color: color.withValues(alpha: 0.15),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: color, width: 0.5),
+                        ),
+                        child: Icon(icon, color: color, size: 26),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(title, style: const TextStyle(color: Colors.white,
+                              fontWeight: FontWeight.bold, fontSize: 18)),
+                          const SizedBox(height: 6),
+                          _chip(badge, color),
+                        ],
+                      )),
+                    ]),
+                    if (photoUrl != null && photoUrl.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: _alertPhoto(photoUrl, color),
+                      ),
+                    ],
+                    if (description.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      Text(description,
+                          style: const TextStyle(
+                              color: Color(0xFFB0BEC5), fontSize: 13.5,
+                              height: 1.4)),
+                    ],
+                    const SizedBox(height: 16),
+                    const Divider(color: Color(0xFF2A3F52), height: 1),
+                    const SizedBox(height: 8),
+                    ...rows,
+                  ],
+                ),
+              ),
+            ),
+
+            // Pinned action bar — always visible, no scrolling needed
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+              decoration: const BoxDecoration(
+                color: Color(0xFF1C2F3F),
+                border: Border(
+                    top: BorderSide(color: Color(0xFF2A3F52), width: 0.5)),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (isTraffic)
+                    _confirmButton(count: a.confirmationCount, onPressed: () {
+                      Navigator.pop(ctx);
+                      _confirmTraffic(a);
+                    }),
+                  if (isDisaster)
+                    _confirmButton(count: a.confirmationCount, onPressed: () {
+                      Navigator.pop(ctx);
+                      _confirmDisaster(a);
+                    }),
+                  if (isCrime || isHealth)
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          _openTipSheet(a.id, a.title);
+                        },
+                        icon: const Icon(Icons.tips_and_updates, size: 15),
+                        label: const Text('I have information',
+                            style: TextStyle(fontSize: 13)),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF4FC3F7),
+                          side: const BorderSide(color: Color(0xFF4FC3F7)),
+                          padding: const EdgeInsets.symmetric(vertical: 11),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                        ),
+                      ),
+                    ),
+                  if (isMissing)
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          Navigator.push(context, MaterialPageRoute(
+                              builder: (_) => AlertDetailScreen(alert: a)));
+                        },
+                        icon: const Icon(Icons.visibility, size: 15),
+                        label: const Text('View & Submit Sighting',
+                            style: TextStyle(fontSize: 13)),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF4FC3F7),
+                          side: const BorderSide(color: Color(0xFF4FC3F7)),
+                          padding: const EdgeInsets.symmetric(vertical: 11),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _goToMapLocation(a);
+                      },
+                      icon: const Icon(Icons.map, size: 16),
+                      label: const Text('View on Map',
+                          style: TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.bold)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF4FC3F7),
+                        foregroundColor: const Color(0xFF0D1B2A),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Renders a person photo from either a base64 data URI or an http(s) URL.
+  Widget _alertPhoto(String url, Color color) {
+    const double height = 220;
+    Widget fallback() => Container(
+          height: height,
+          color: const Color(0xFF0D1B2A),
+          child: Icon(Icons.person, color: color.withValues(alpha: 0.4), size: 60),
+        );
+
+    if (url.startsWith('data:image')) {
+      try {
+        final bytes = base64Decode(url.split(',').last);
+        return Image.memory(bytes,
+            height: height, width: double.infinity, fit: BoxFit.cover,
+            errorBuilder: (_, _, _) => fallback());
+      } catch (_) {
+        return fallback();
+      }
+    }
+    return Image.network(url,
+        height: height, width: double.infinity, fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => fallback(),
+        loadingBuilder: (ctx, child, progress) =>
+            progress == null ? child : Container(
+              height: height,
+              color: const Color(0xFF0D1B2A),
+              child: const Center(
+                  child: CircularProgressIndicator(color: Color(0xFF4FC3F7))),
+            ));
+  }
+
+  Widget _detailRow(IconData icon, String label, String value) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 7),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, color: const Color(0xFF4FC3F7), size: 16),
+            const SizedBox(width: 10),
+            SizedBox(
+              width: 96,
+              child: Text(label,
+                  style: const TextStyle(
+                      color: Color(0xFF90A4AE), fontSize: 12.5)),
+            ),
+            Expanded(
+              child: Text(value,
+                  style: const TextStyle(
+                      color: Colors.white, fontSize: 12.5,
+                      fontWeight: FontWeight.w500)),
+            ),
+          ],
+        ),
+      );
+
   // Shared confirm-hazard button (traffic & disaster) — shows current count.
   Widget _confirmButton({
     required int count,
@@ -932,12 +1259,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _mixedAlertCard(_MixedAlert a) {
     return GestureDetector(
-      onTap: () {
-        setState(() {
-          _selected = a.original;
-          _navIndex = 0;
-        });
-      },
+      // Tap the card body → show full details.
+      onTap: () => _showAlertDetails(a.original),
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.all(14),
@@ -973,22 +1296,44 @@ class _HomeScreenState extends State<HomeScreen> {
               _chip(a.badge.replaceAll('_', ' ').toUpperCase(), a.color),
             ],
           )),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text('${a.distanceKm} km',
-                  style: const TextStyle(
-                      color: Color(0xFF4FC3F7),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12)),
-              const SizedBox(height: 4),
-              const Icon(Icons.chevron_right,
-                  color: Color(0xFF90A4AE), size: 18),
-            ],
+          // Tap the arrow → jump to the alert's location on the map.
+          GestureDetector(
+            onTap: () => _goToMapLocation(a.original),
+            behavior: HitTestBehavior.opaque,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 6),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text('${a.distanceKm} km',
+                      style: const TextStyle(
+                          color: Color(0xFF4FC3F7),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12)),
+                  const SizedBox(height: 4),
+                  const Icon(Icons.map_outlined,
+                      color: Color(0xFF4FC3F7), size: 18),
+                ],
+              ),
+            ),
           ),
         ]),
       ),
     );
+  }
+
+  void _goToMapLocation(dynamic original) {
+    setState(() {
+      _selected = original;
+      _navIndex = 0;
+    });
+  }
+
+  String _fmtDate(String iso) {
+    final dt = DateTime.tryParse(iso);
+    if (dt == null) return iso;
+    return DateFormat('MMM d, yyyy · h:mm a').format(dt.toLocal());
   }
 
   // ── Authority review tab ─────────────────────────────────────────────────────
