@@ -16,6 +16,7 @@ class AlertModel {
   final String? photoUrl;
   final bool cctv;
   final String createdAt;
+  final int? reporterId;
 
   AlertModel({
     required this.id,
@@ -33,6 +34,7 @@ class AlertModel {
     this.photoUrl,
     required this.cctv,
     required this.createdAt,
+    this.reporterId,
   });
 
   factory AlertModel.fromJson(Map<String, dynamic> j) => AlertModel(
@@ -51,6 +53,7 @@ class AlertModel {
         photoUrl:             j['photo_url'],
         cctv:                 j['cctv_corroborated'] ?? false,
         createdAt:            j['created_at'] ?? '',
+        reporterId:           j['reporter_id'],
       );
 
   Color get severityColor {

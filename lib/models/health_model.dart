@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
+import 'geo_utils.dart';
 
 class HealthModel {
   final int    id;
@@ -13,6 +15,9 @@ class HealthModel {
   final String? preventionProtocols;
   final String? healthFacility;
   final String? officialSource;
+  final int? reporterId;
+  final double? affectedRadiusKm;
+  final List<LatLng>? affectedPolygon;
   final double latitude;
   final double longitude;
   final double distanceKm;
@@ -31,6 +36,9 @@ class HealthModel {
     this.preventionProtocols,
     this.healthFacility,
     this.officialSource,
+    this.reporterId,
+    this.affectedRadiusKm,
+    this.affectedPolygon,
     required this.latitude,
     required this.longitude,
     required this.distanceKm,
@@ -50,6 +58,9 @@ class HealthModel {
         preventionProtocols:  j['prevention_protocols'],
         healthFacility:       j['health_facility'],
         officialSource:       j['official_source'],
+        reporterId:           j['reporter_id'],
+        affectedRadiusKm:     (j['affected_radius_km'] as num?)?.toDouble(),
+        affectedPolygon:      parseGeoJsonRing(j['affected_geojson']),
         latitude:             (j['latitude']    ?? 0).toDouble(),
         longitude:            (j['longitude']   ?? 0).toDouble(),
         distanceKm:           (j['distance_km'] ?? 0).toDouble(),

@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import '../../services/api_service.dart';
 import '../../services/location_service.dart';
+import '../../widgets/photo_picker_field.dart';
 import 'location_picker_screen.dart';
 
 class DisasterReportScreen extends StatefulWidget {
-  const DisasterReportScreen({super.key});
+  final String? initialPhoto;  // pre-captured photo from Snap Incident
+  final String? initialType;   // pre-selected hazard type
+  const DisasterReportScreen({super.key, this.initialPhoto, this.initialType});
 
   @override
   State<DisasterReportScreen> createState() => _DisasterReportScreenState();
@@ -28,6 +31,7 @@ class _DisasterReportScreenState extends State<DisasterReportScreen> {
   bool    _locating   = true;
   String? _locError;
   bool    _submitting = false;
+  String? _photoDataUri;
 
   static const _hazardTypes = [
     'flood', 'tsunami', 'cyclone', 'earthquake',
@@ -50,6 +54,10 @@ class _DisasterReportScreenState extends State<DisasterReportScreen> {
   @override
   void initState() {
     super.initState();
+    _photoDataUri = widget.initialPhoto;
+    if (widget.initialType != null && _hazardTypes.contains(widget.initialType)) {
+      _hazardType = widget.initialType!;
+    }
     _getLocation();
   }
 
@@ -97,6 +105,7 @@ class _DisasterReportScreenState extends State<DisasterReportScreen> {
         'evacuation_routes': _evacuationCtrl.text.trim().isEmpty
                              ? null
                              : _evacuationCtrl.text.trim(),
+        'photo_url':         _photoDataUri,
       });
 
       if (!mounted) return;
@@ -257,6 +266,15 @@ class _DisasterReportScreenState extends State<DisasterReportScreen> {
               label: 'Evacuation Routes / Safety Info (optional)',
               hint: 'e.g. Move towards higher ground via Main Street',
               maxLines: 2,
+            ),
+            const SizedBox(height: 20),
+
+            _sectionLabel('PHOTO EVIDENCE'),
+            const SizedBox(height: 8),
+            PhotoPickerField(
+              onChanged: (v) => _photoDataUri = v,
+              label: 'Add a photo of the scene (optional)',
+              initialDataUri: widget.initialPhoto,
             ),
             const SizedBox(height: 20),
 

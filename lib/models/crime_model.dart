@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
+import 'geo_utils.dart';
 
 class CrimeModel {
   final int    id;
@@ -11,6 +13,10 @@ class CrimeModel {
   final String incidentType;
   final String? suspectDescription;
   final String? policeCase;
+  final String? photoUrl;
+  final int? reporterId;
+  final double? affectedRadiusKm;
+  final List<LatLng>? affectedPolygon;
   final double latitude;
   final double longitude;
   final double distanceKm;
@@ -27,6 +33,10 @@ class CrimeModel {
     required this.incidentType,
     this.suspectDescription,
     this.policeCase,
+    this.photoUrl,
+    this.reporterId,
+    this.affectedRadiusKm,
+    this.affectedPolygon,
     required this.latitude,
     required this.longitude,
     required this.distanceKm,
@@ -44,6 +54,10 @@ class CrimeModel {
         incidentType:        j['incident_type'] ?? 'other',
         suspectDescription:  j['suspect_description'],
         policeCase:          j['police_case_number'],
+        photoUrl:            j['photo_url'],
+        reporterId:          j['reporter_id'],
+        affectedRadiusKm:    (j['affected_radius_km'] as num?)?.toDouble(),
+        affectedPolygon:     parseGeoJsonRing(j['affected_geojson']),
         latitude:            (j['latitude']    ?? 0).toDouble(),
         longitude:           (j['longitude']   ?? 0).toDouble(),
         distanceKm:          (j['distance_km'] ?? 0).toDouble(),

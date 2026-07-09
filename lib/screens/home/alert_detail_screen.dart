@@ -18,6 +18,68 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
   bool  _submitting  = false;
   Map<String, dynamic>? _tvmResult;
   String? _error;
+  int?    _myUserId;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMe();
+  }
+
+  Future<void> _loadMe() async {
+    final id = await _api.getUserId();
+    if (mounted) setState(() => _myUserId = int.tryParse(id ?? ''));
+  }
+
+  bool get _isMine =>
+      _myUserId != null && widget.alert.reporterId == _myUserId;
+
+  Future<void> _resolve() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1C2F3F),
+        title: const Text('Mark as found / resolved?',
+            style: TextStyle(color: Colors.white, fontSize: 16)),
+        content: const Text(
+          'This will close the alert and remove it from everyone\'s feed. '
+          'You can\'t undo this.',
+          style: TextStyle(color: Color(0xFF90A4AE), fontSize: 13.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel',
+                style: TextStyle(color: Color(0xFF90A4AE))),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF66BB6A),
+              foregroundColor: const Color(0xFF0D1B2A),
+            ),
+            child: const Text('Resolve'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await _api.resolveMyAlert(widget.alert.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Alert resolved — thank you!'),
+            backgroundColor: Color(0xFF1C2F3F)),
+      );
+      Navigator.pop(context, true);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not resolve the alert'),
+            backgroundColor: Color(0xFF1C2F3F)),
+      );
+    }
+  }
 
   Future<void> _submitSighting() async {
     if (_descCtrl.text.trim().length < 10) {
@@ -108,6 +170,26 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
                 ]),
               ],
             )),
+
+            // ── Reporter-only: mark found / resolved ────────────────────────
+            if (_isMine) ...[
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _resolve,
+                  icon: const Icon(Icons.check_circle_outline, size: 18),
+                  label: const Text('Mark as Found / Resolved'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF66BB6A),
+                    side: const BorderSide(color: Color(0xFF66BB6A)),
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+            ],
 
             const SizedBox(height: 14),
 

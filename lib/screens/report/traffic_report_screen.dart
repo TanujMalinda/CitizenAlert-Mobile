@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import '../../services/api_service.dart';
 import '../../services/location_service.dart';
+import '../../widgets/photo_picker_field.dart';
 import 'location_picker_screen.dart';
 
 class TrafficReportScreen extends StatefulWidget {
-  const TrafficReportScreen({super.key});
+  final String? initialPhoto;
+  final String? initialType;
+  const TrafficReportScreen({super.key, this.initialPhoto, this.initialType});
 
   @override
   State<TrafficReportScreen> createState() => _TrafficReportScreenState();
@@ -26,6 +29,7 @@ class _TrafficReportScreenState extends State<TrafficReportScreen> {
   bool    _locating   = true;
   String? _locError;
   bool    _submitting = false;
+  String? _photoDataUri;
 
   static const _hazardTypes = [
     'accident', 'road_closure', 'flooding',
@@ -44,6 +48,10 @@ class _TrafficReportScreenState extends State<TrafficReportScreen> {
   @override
   void initState() {
     super.initState();
+    _photoDataUri = widget.initialPhoto;
+    if (widget.initialType != null && _hazardTypes.contains(widget.initialType)) {
+      _hazardType = widget.initialType!;
+    }
     _getLocation();
   }
 
@@ -183,6 +191,7 @@ class _TrafficReportScreenState extends State<TrafficReportScreen> {
         'road_segment': _roadCtrl.text.trim().isEmpty
                         ? null
                         : _roadCtrl.text.trim(),
+        'photo_url':    _photoDataUri,
       });
 
       if (!mounted) { return; }
@@ -341,6 +350,15 @@ class _TrafficReportScreenState extends State<TrafficReportScreen> {
               controller: _roadCtrl,
               label: 'Road / Segment (optional)',
               hint: 'e.g. A1 Highway, Kandy Road near Kelaniya',
+            ),
+            const SizedBox(height: 20),
+
+            _sectionLabel('PHOTO EVIDENCE'),
+            const SizedBox(height: 8),
+            PhotoPickerField(
+              onChanged: (v) => _photoDataUri = v,
+              label: 'Add a photo of the hazard (optional)',
+              initialDataUri: widget.initialPhoto,
             ),
             const SizedBox(height: 20),
 

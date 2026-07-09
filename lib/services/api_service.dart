@@ -53,6 +53,7 @@ class ApiService {
   Future<String?> getToken() => _storage.read(key: 'jwt_token');
   Future<String?> getUserName() => _storage.read(key: 'user_name');
   Future<String?> getUserRole() => _storage.read(key: 'user_role');
+  Future<String?> getUserId() => _storage.read(key: 'user_id');
 
   /// Returns true only if a token exists AND the server accepts it.
   /// On network errors the token is preserved so the user doesn't have to
@@ -272,6 +273,23 @@ Future<Map<String, dynamic>> confirmDisaster(int alertId) async {
   }) async {
     final res = await _dio.post('/authority/alerts/$alertId/review',
         data: {'action': action, 'notes': notes});
+    return res.data;
+  }
+
+  /// Original reporter (or an authority) resolves an alert — removes it from
+  /// public feeds.
+  Future<Map<String, dynamic>> resolveMyAlert(int alertId) async {
+    final res = await _dio.post('/alerts/$alertId/resolve', data: {});
+    return res.data;
+  }
+
+  // ── Vision AI ────────────────────────────────────────────────────────────────
+
+  /// Classify an incident photo with the trained model.
+  /// Returns predicted type, confidence, and the matching alert category.
+  Future<Map<String, dynamic>> classifyIncident(String imageDataUri) async {
+    final res = await _dio.post('/vision/classify',
+        data: {'image': imageDataUri});
     return res.data;
   }
 }

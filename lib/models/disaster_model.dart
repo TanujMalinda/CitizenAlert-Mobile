@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
+import 'geo_utils.dart';
 
 class DisasterModel {
   final int    id;
@@ -11,6 +13,10 @@ class DisasterModel {
   final String? affectedArea;
   final String? evacuationRoutes;
   final String? officialSource;
+  final String? photoUrl;
+  final int? reporterId;
+  final double? affectedRadiusKm;
+  final List<LatLng>? affectedPolygon;
   final int    confirmationCount;
   final double latitude;
   final double longitude;
@@ -28,6 +34,10 @@ class DisasterModel {
     this.affectedArea,
     this.evacuationRoutes,
     this.officialSource,
+    this.photoUrl,
+    this.reporterId,
+    this.affectedRadiusKm,
+    this.affectedPolygon,
     required this.confirmationCount,
     required this.latitude,
     required this.longitude,
@@ -46,6 +56,10 @@ class DisasterModel {
         affectedArea:     j['affected_area'],
         evacuationRoutes: j['evacuation_routes'],
         officialSource:   j['official_source'],
+        photoUrl:         j['photo_url'],
+        reporterId:       j['reporter_id'],
+        affectedRadiusKm: (j['affected_radius_km'] as num?)?.toDouble(),
+        affectedPolygon:  parseGeoJsonRing(j['affected_geojson']),
         confirmationCount: (j['confirmation_count'] ?? 1) is int
                            ? (j['confirmation_count'] ?? 1)
                            : int.tryParse(j['confirmation_count'].toString()) ?? 1,

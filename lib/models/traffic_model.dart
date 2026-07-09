@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
+import 'geo_utils.dart';
 
 class TrafficModel {
   final int    id;
@@ -12,6 +14,10 @@ class TrafficModel {
   final String? roadSegment;
   final int    confirmationCount;
   final String? expectedClearTime;
+  final String? photoUrl;
+  final int? reporterId;
+  final double? affectedRadiusKm;
+  final List<LatLng>? affectedPolygon;
   final double latitude;
   final double longitude;
   final double distanceKm;
@@ -29,6 +35,10 @@ class TrafficModel {
     this.roadSegment,
     required this.confirmationCount,
     this.expectedClearTime,
+    this.photoUrl,
+    this.reporterId,
+    this.affectedRadiusKm,
+    this.affectedPolygon,
     required this.latitude,
     required this.longitude,
     required this.distanceKm,
@@ -47,6 +57,10 @@ class TrafficModel {
         roadSegment:        j['road_segment'],
         confirmationCount:  (j['confirmation_count'] ?? 1) as int,
         expectedClearTime:  j['expected_clear_time']?.toString(),
+        photoUrl:           j['photo_url'],
+        reporterId:         j['reporter_id'],
+        affectedRadiusKm:   (j['affected_radius_km'] as num?)?.toDouble(),
+        affectedPolygon:    parseGeoJsonRing(j['affected_geojson']),
         latitude:           (j['latitude']    ?? 0).toDouble(),
         longitude:          (j['longitude']   ?? 0).toDouble(),
         distanceKm:         (j['distance_km'] ?? 0).toDouble(),

@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import '../../services/api_service.dart';
 import '../../services/location_service.dart';
+import '../../widgets/photo_picker_field.dart';
 import 'location_picker_screen.dart';
 
 class CrimeReportScreen extends StatefulWidget {
-  const CrimeReportScreen({super.key});
+  final String? initialPhoto;
+  final String? initialType;
+  const CrimeReportScreen({super.key, this.initialPhoto, this.initialType});
 
   @override
   State<CrimeReportScreen> createState() => _CrimeReportScreenState();
@@ -28,6 +31,7 @@ class _CrimeReportScreenState extends State<CrimeReportScreen> {
   String? _locError;
   bool    _submitting   = false;
   bool    _anonymous    = false;
+  String? _photoDataUri;
 
   static const _incidentTypes = [
     'theft', 'assault', 'robbery', 'vandalism',
@@ -48,6 +52,10 @@ class _CrimeReportScreenState extends State<CrimeReportScreen> {
   @override
   void initState() {
     super.initState();
+    _photoDataUri = widget.initialPhoto;
+    if (widget.initialType != null && _incidentTypes.contains(widget.initialType)) {
+      _incidentType = widget.initialType!;
+    }
     _getLocation();
   }
 
@@ -92,6 +100,7 @@ class _CrimeReportScreenState extends State<CrimeReportScreen> {
         'suspect_description': _suspectCtrl.text.trim().isEmpty
                                ? null
                                : _suspectCtrl.text.trim(),
+        'photo_url':           _photoDataUri,
         'anonymous':           _anonymous,
       });
 
@@ -256,6 +265,15 @@ class _CrimeReportScreenState extends State<CrimeReportScreen> {
               label: 'Suspect Description (optional)',
               hint: 'Physical description, clothing, vehicle, etc.',
               maxLines: 2,
+            ),
+            const SizedBox(height: 20),
+
+            _sectionLabel('PHOTO EVIDENCE'),
+            const SizedBox(height: 8),
+            PhotoPickerField(
+              onChanged: (v) => _photoDataUri = v,
+              label: 'Add a photo of the scene (optional)',
+              initialDataUri: widget.initialPhoto,
             ),
             const SizedBox(height: 20),
 

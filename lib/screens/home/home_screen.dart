@@ -18,6 +18,7 @@ import '../report/crime_report_screen.dart';
 import '../report/traffic_report_screen.dart';
 import '../report/health_report_screen.dart';
 import '../report/disaster_report_screen.dart';
+import '../report/snap_incident_screen.dart';
 import '../notifications/notifications_screen.dart';
 import 'alert_detail_screen.dart';
 import 'alert_tip_sheet.dart';
@@ -62,6 +63,9 @@ class _HomeScreenState extends State<HomeScreen> {
   final Set<String> _knownAlertKeys = {};
   bool _firstAlertLoad = true;
 
+  // Current user id — used to show "resolve my alert" on alerts I reported.
+  int? _myUserId;
+
   // Authority review queue (role-gated)
   bool _isAuthority = false;
   List<Map<String, dynamic>> _pendingReviews = [];
@@ -80,10 +84,71 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _initRole() async {
-    final role = await _api.getUserRole();
-    if (role == 'authority' && mounted) {
+    final idStr = await _api.getUserId();
+    final role  = await _api.getUserRole();
+    if (!mounted) return;
+    setState(() => _myUserId = int.tryParse(idStr ?? ''));
+    if (role == 'authority') {
       setState(() => _isAuthority = true);
       _loadPendingReviews();
+    }
+  }
+
+  Future<void> _resolveMine(int alertId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1C2F3F),
+        title: const Text('Mark as resolved?',
+            style: TextStyle(color: Colors.white, fontSize: 16)),
+        content: const Text(
+          'This will close the alert and remove it from everyone\'s feed. '
+          'You can\'t undo this.',
+          style: TextStyle(color: Color(0xFF90A4AE), fontSize: 13.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel',
+                style: TextStyle(color: Color(0xFF90A4AE))),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF66BB6A),
+              foregroundColor: const Color(0xFF0D1B2A),
+            ),
+            child: const Text('Resolve'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await _api.resolveMyAlert(alertId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Alert resolved — thank you!'),
+            backgroundColor: Color(0xFF1C2F3F)),
+      );
+      setState(() => _selected = null);
+      await _loadAll();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not resolve the alert'),
+            backgroundColor: Color(0xFF1C2F3F)),
+      );
+    }
+  }
+
+  // True if the given alert was reported by the logged-in user.
+  bool _isMine(dynamic a) {
+    if (_myUserId == null) return false;
+    try {
+      return a.reporterId == _myUserId;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -448,6 +513,10 @@ class _HomeScreenState extends State<HomeScreen> {
             urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
             userAgentPackageName: 'com.citizenalert.mobile',
           ),
+          // Affected areas (CAP-style): drawn polygon when present,
+          // otherwise a severity-default circle. Rendered under the markers.
+          PolygonLayer(polygons: _affectedPolygons()),
+          CircleLayer(circles: _affectedCircles()),
           MarkerLayer(markers: [
             // User location
             Marker(
@@ -530,6 +599,63 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     ]);
   }
+
+  // ── Affected-area overlays ───────────────────────────────────────────────────
+  // Each visible alert contributes either its drawn polygon (river floods etc.)
+  // or a severity-default circle. (type, color, polygon?, center, radiusKm?)
+  List<(Color, List<LatLng>?, LatLng, double?)> _areaSources() {
+    final out = <(Color, List<LatLng>?, LatLng, double?)>[];
+    if (_showDisaster) {
+      for (final a in _disasterAlerts) {
+        out.add((a.severityColor, a.affectedPolygon,
+                 LatLng(a.latitude, a.longitude), a.affectedRadiusKm));
+      }
+    }
+    if (_showCrime) {
+      for (final a in _crimeAlerts) {
+        out.add((a.incidentColor, a.affectedPolygon,
+                 LatLng(a.latitude, a.longitude), a.affectedRadiusKm));
+      }
+    }
+    if (_showTraffic) {
+      for (final a in _trafficAlerts) {
+        out.add((a.hazardColor, a.affectedPolygon,
+                 LatLng(a.latitude, a.longitude), a.affectedRadiusKm));
+      }
+    }
+    if (_showHealth) {
+      for (final a in _healthAlerts) {
+        out.add((a.diseaseColor, a.affectedPolygon,
+                 LatLng(a.latitude, a.longitude), a.affectedRadiusKm));
+      }
+    }
+    return out;
+  }
+
+  List<Polygon> _affectedPolygons() => [
+        for (final (color, poly, _, _) in _areaSources())
+          if (poly != null && poly.length >= 3)
+            Polygon(
+              points: poly,
+              isFilled: true,
+              color: color.withValues(alpha: 0.15),
+              borderColor: color.withValues(alpha: 0.6),
+              borderStrokeWidth: 1.5,
+            ),
+      ];
+
+  List<CircleMarker> _affectedCircles() => [
+        for (final (color, poly, center, radiusKm) in _areaSources())
+          if (poly == null && radiusKm != null && radiusKm > 0)
+            CircleMarker(
+              point: center,
+              radius: radiusKm * 1000,
+              useRadiusInMeter: true,
+              color: color.withValues(alpha: 0.12),
+              borderColor: color.withValues(alpha: 0.5),
+              borderStrokeWidth: 1.2,
+            ),
+      ];
 
   Marker _buildMarker({
     required LatLng point,
@@ -800,6 +926,7 @@ class _HomeScreenState extends State<HomeScreen> {
       color = a.hazardColor; icon = a.hazardIcon;
       title = a.title; badge = a.hazardType.toUpperCase();
       description = a.description;
+      photoUrl = a.photoUrl;
       if (a.affectedArea != null) {
         rows.add(_detailRow(Icons.map, 'Affected area', a.affectedArea!));
       }
@@ -815,6 +942,7 @@ class _HomeScreenState extends State<HomeScreen> {
       color = a.incidentColor; icon = a.incidentIcon;
       title = a.title; badge = a.incidentType.replaceAll('_', ' ').toUpperCase();
       description = a.description;
+      photoUrl = a.photoUrl;
       rows.add(_detailRow(
           a.tvmStatus == 'verified' ? Icons.verified : Icons.pending,
           'Status', a.tvmStatus == 'verified' ? 'Verified' : 'Under review'));
@@ -828,6 +956,7 @@ class _HomeScreenState extends State<HomeScreen> {
       color = a.hazardColor; icon = a.hazardIcon;
       title = a.title; badge = a.hazardType.replaceAll('_', ' ').toUpperCase();
       description = a.description;
+      photoUrl = a.photoUrl;
       if (a.roadSegment != null) {
         rows.add(_detailRow(Icons.add_road, 'Road', a.roadSegment!));
       }
@@ -859,6 +988,12 @@ class _HomeScreenState extends State<HomeScreen> {
     // Common rows (AlertModel/missing has no `district` field)
     if (!isMissing) {
       rows.add(_detailRow(Icons.location_city, 'District', a.district ?? '—'));
+      if (a.affectedPolygon != null) {
+        rows.add(_detailRow(Icons.radar, 'Affected area', 'Marked zone (see map)'));
+      } else if (a.affectedRadiusKm != null) {
+        rows.add(_detailRow(Icons.radar, 'Affected area',
+            '~${(a.affectedRadiusKm as double).toStringAsFixed(1)} km radius'));
+      }
     }
     rows.add(_detailRow(Icons.near_me, 'Distance',
         '${a.distanceKm.toStringAsFixed(1)} km away'));
@@ -957,6 +1092,29 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // Reporter-only: close my own alert
+                  if (_isMine(a)) ...[
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          _resolveMine(a.id);
+                        },
+                        icon: const Icon(Icons.check_circle_outline, size: 16),
+                        label: const Text('Mark as Resolved',
+                            style: TextStyle(fontSize: 13)),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF66BB6A),
+                          side: const BorderSide(color: Color(0xFF66BB6A)),
+                          padding: const EdgeInsets.symmetric(vertical: 11),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                  ],
                   if (isTraffic)
                     _confirmButton(count: a.confirmationCount, onPressed: () {
                       Navigator.pop(ctx);
@@ -994,7 +1152,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         onPressed: () {
                           Navigator.pop(ctx);
                           Navigator.push(context, MaterialPageRoute(
-                              builder: (_) => AlertDetailScreen(alert: a)));
+                              builder: (_) => AlertDetailScreen(alert: a)))
+                              .then((_) { if (mounted) _loadAll(); });
                         },
                         icon: const Icon(Icons.visibility, size: 15),
                         label: const Text('View & Submit Sighting',
@@ -1425,6 +1584,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 maxLines: 3, overflow: TextOverflow.ellipsis,
                 style: const TextStyle(color: Color(0xFFB0BEC5), fontSize: 12.5)),
           ],
+          if ((a['photo_url']?.toString() ?? '').isNotEmpty) ...[
+            const SizedBox(height: 10),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: _alertPhoto(a['photo_url'].toString(), color),
+            ),
+          ],
           const SizedBox(height: 8),
           Wrap(spacing: 6, runSpacing: 4, children: [
             _chip(type.toUpperCase(), color),
@@ -1509,6 +1675,19 @@ class _HomeScreenState extends State<HomeScreen> {
                 style: TextStyle(color: Colors.white,
                     fontSize: 16, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
+            _reportOption(
+              icon: Icons.camera_alt,
+              color: const Color(0xFF7E57C2),
+              title: 'Snap Incident (AI)',
+              subtitle: 'Take a photo — AI identifies the incident type',
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => const SnapIncidentScreen()))
+                    .then((_) => _loadAll());
+              },
+            ),
+            const SizedBox(height: 10),
             _reportOption(
               icon: Icons.person_search,
               color: const Color(0xFF4FC3F7),
