@@ -86,6 +86,22 @@ class _SnapIncidentScreenState extends State<SnapIncidentScreen> {
         context, MaterialPageRoute(builder: (_) => screen!));
   }
 
+  // Route to a chosen alert type (the low-confidence "report as … anyway"
+  // path) — keeps the photo, but doesn't pre-select a sub-type we're unsure of.
+  void _continueToReportAs(String? alertType) {
+    Widget? screen;
+    if (alertType == 'traffic') {
+      screen = TrafficReportScreen(initialPhoto: _dataUri);
+    } else if (alertType == 'disaster') {
+      screen = DisasterReportScreen(initialPhoto: _dataUri);
+    } else if (alertType == 'crime') {
+      screen = CrimeReportScreen(initialPhoto: _dataUri);
+    }
+    if (screen == null) { _reportManually(); return; }
+    Navigator.pushReplacement(
+        context, MaterialPageRoute(builder: (_) => screen!));
+  }
+
   // Manual fallback — let the user pick the form themselves, keeping the photo.
   void _reportManually() {
     showModalBottomSheet(
@@ -207,19 +223,44 @@ class _SnapIncidentScreenState extends State<SnapIncidentScreen> {
     );
   }
 
+  String _typeLabel(String? t) =>
+      t == 'traffic' ? 'Traffic' : t == 'disaster' ? 'Disaster'
+      : t == 'crime' ? 'Crime' : 'Incident';
+
   Widget _resultCard(Map<String, dynamic> r) {
-    final alertType  = r['alert_type'] as String?;
-    final predicted  = (r['predicted'] ?? '').toString().replaceAll('_', ' ');
-    final confidence = ((r['confidence'] ?? 0) * 100).toInt();
-    final reliable   = r['reliable'] == true;
-    final isIncident = alertType != null;
+    final alertType     = r['alert_type'] as String?;       // null unless confident
+    final suggestedType = r['suggested_type'] as String?;   // raw guess (may be null)
+    final predicted     = (r['predicted'] ?? '').toString().replaceAll('_', ' ');
+    final confidence    = ((r['confidence'] ?? 0) * 100).toInt();
+    final confident     = (r['confident'] ?? r['reliable']) == true;
     final isPlaceholder = r['engine'] == 'placeholder';
 
-    final Color color = !isIncident
-        ? const Color(0xFF90A4AE)
-        : reliable
-            ? const Color(0xFF66BB6A)
-            : const Color(0xFFFF9800);
+    // Three states:
+    //  confident  → auto-route (green)
+    //  uncertain  → a weak guess exists but below the floor (amber)
+    //  none       → model says normal / not an incident (grey)
+    final bool confidentIncident = confident && alertType != null;
+    final bool uncertain = !confidentIncident && suggestedType != null;
+
+    final Color color = confidentIncident
+        ? const Color(0xFF66BB6A)
+        : uncertain
+            ? const Color(0xFFFF9800)
+            : const Color(0xFF90A4AE);
+
+    final String heading = confidentIncident
+        ? 'Detected: ${predicted[0].toUpperCase()}${predicted.substring(1)}'
+        : uncertain
+            ? 'Not sure — this might be ${_typeLabel(suggestedType)}'
+            : 'No incident detected';
+
+    final String body = confidentIncident
+        ? 'Model confidence: $confidence%'
+        : uncertain
+            ? 'Only $confidence% confident — too low to auto-select. Please '
+              'choose the correct report type yourself.'
+            : 'This doesn\'t look like a reportable incident. Retake the photo, '
+              'or choose a report type manually.';
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -233,44 +274,36 @@ class _SnapIncidentScreenState extends State<SnapIncidentScreen> {
         children: [
           Row(children: [
             Icon(
-              !isIncident
-                  ? Icons.help_outline
-                  : reliable ? Icons.check_circle : Icons.info_outline,
+              confidentIncident
+                  ? Icons.check_circle
+                  : uncertain ? Icons.help_outline : Icons.info_outline,
               color: color, size: 22,
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: Text(
-                !isIncident
-                    ? 'No incident detected'
-                    : 'Detected: ${predicted[0].toUpperCase()}${predicted.substring(1)}',
-                style: TextStyle(
-                    color: color, fontWeight: FontWeight.bold, fontSize: 15),
-              ),
+              child: Text(heading,
+                  style: TextStyle(
+                      color: color, fontWeight: FontWeight.bold, fontSize: 15)),
             ),
           ]),
           const SizedBox(height: 8),
-          Text(
-            !isIncident
-                ? 'This doesn\'t look like a reportable incident. Retake the '
-                  'photo, or choose a report type manually.'
-                : 'Model confidence: $confidence%'
-                  '${reliable ? '' : ' — low, please confirm the type on the next screen'}',
-            style: const TextStyle(color: Color(0xFF90A4AE), fontSize: 12.5),
-          ),
+          Text(body,
+              style: const TextStyle(color: Color(0xFF90A4AE), fontSize: 12.5)),
           if (isPlaceholder) ...[
             const SizedBox(height: 6),
             const Text('(demo prediction — trained model not installed yet)',
                 style: TextStyle(color: Color(0xFF4A6070), fontSize: 11)),
           ],
           const SizedBox(height: 14),
-          if (isIncident)
+
+          // Confident → primary green Continue button
+          if (confidentIncident)
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
                 onPressed: _continueToReport,
                 icon: const Icon(Icons.arrow_forward, size: 16),
-                label: Text('Continue to ${alertType == 'traffic' ? 'Traffic' : alertType == 'disaster' ? 'Disaster' : 'Crime'} report'),
+                label: Text('Continue to ${_typeLabel(alertType)} report'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: color,
                   foregroundColor: const Color(0xFF0D1B2A),
@@ -280,15 +313,50 @@ class _SnapIncidentScreenState extends State<SnapIncidentScreen> {
                 ),
               ),
             ),
-          const SizedBox(height: 8),
-          SizedBox(
-            width: double.infinity,
-            child: TextButton(
-              onPressed: _reportManually,
-              child: const Text('Choose report type manually',
-                  style: TextStyle(color: Color(0xFF4FC3F7), fontSize: 13)),
+
+          // Uncertain → manual is primary; the weak guess is a secondary option
+          if (uncertain) ...[
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _reportManually,
+                icon: const Icon(Icons.list_alt, size: 16),
+                label: const Text('Choose report type'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF4FC3F7),
+                  foregroundColor: const Color(0xFF0D1B2A),
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
             ),
-          ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: () => _continueToReportAs(suggestedType),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFFF9800),
+                  side: const BorderSide(color: Color(0xFFFF9800)),
+                  padding: const EdgeInsets.symmetric(vertical: 11),
+                ),
+                child: Text('Report as ${_typeLabel(suggestedType)} anyway',
+                    style: const TextStyle(fontSize: 13)),
+              ),
+            ),
+          ],
+
+          // Normal / no guess → just the manual link
+          if (!confidentIncident && !uncertain)
+            SizedBox(
+              width: double.infinity,
+              child: TextButton(
+                onPressed: _reportManually,
+                child: const Text('Choose report type manually',
+                    style: TextStyle(color: Color(0xFF4FC3F7), fontSize: 13)),
+              ),
+            ),
         ],
       ),
     );

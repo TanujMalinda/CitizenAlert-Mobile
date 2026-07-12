@@ -34,6 +34,11 @@ class _HomeScreenState extends State<HomeScreen> {
   // 0 = Map, 1 = Alerts list, 2 = Review (authority only)
   int _navIndex = 0;
 
+  // Alerts-list scrolling + "jump to this alert" highlight
+  final ScrollController _listScroll = ScrollController();
+  final Map<String, GlobalKey> _listItemKeys = {};
+  String? _highlightedKey;
+
   // Data
   List<AlertModel>   _missingAlerts  = [];
   List<DisasterModel> _disasterAlerts = [];
@@ -201,7 +206,62 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _poller.stop();
+    _listScroll.dispose();
     super.dispose();
+  }
+
+  // Unique key per alert (matches the notify scheme: m/d/c/t/h + id).
+  String _alertKey(dynamic a) {
+    if (a is AlertModel) return 'm${a.id}';
+    if (a is DisasterModel) return 'd${a.id}';
+    if (a is CrimeModel) return 'c${a.id}';
+    if (a is TrafficModel) return 't${a.id}';
+    if (a is HealthModel) return 'h${a.id}';
+    return '';
+  }
+
+  // Jump from the map's selected-alert card to that alert in the list tab,
+  // scroll it into view, and briefly highlight it. Uses the item's index so it
+  // works even for items far down the list that aren't built yet (a lazy
+  // ListView.builder doesn't render off-screen items, so ensureVisible alone
+  // can't reach them).
+  void _goToAlertInList(dynamic original) {
+    final key = _alertKey(original);
+    final index = _sortedMixedAlerts()
+        .indexWhere((m) => _alertKey(m.original) == key);
+    setState(() {
+      _selected = null;
+      _navIndex = 1;
+      _highlightedKey = key;
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!_listScroll.hasClients) return;
+      if (index >= 0) {
+        // Estimated card height (margin + padding + content). Scrolling here
+        // forces the target item to build, so the fine-correction below lands.
+        const estExtent = 86.0;
+        const topPad = 12.0;
+        final target = (topPad + index * estExtent)
+            .clamp(0.0, _listScroll.position.maxScrollExtent);
+        await _listScroll.animateTo(target,
+            duration: const Duration(milliseconds: 450), curve: Curves.easeInOut);
+      }
+      // Now the item is rendered — precisely align it near the top.
+      final ctx = _listItemKeys[key]?.currentContext;
+      if (ctx != null && ctx.mounted) {
+        await Scrollable.ensureVisible(ctx,
+            duration: const Duration(milliseconds: 200),
+            alignment: 0.15, curve: Curves.easeInOut);
+      }
+    });
+
+    // Fade the highlight after a moment.
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted && _highlightedKey == key) {
+        setState(() => _highlightedKey = null);
+      }
+    });
   }
 
   Future<void> _initNotifications() async {
@@ -756,8 +816,22 @@ class _HomeScreenState extends State<HomeScreen> {
             Expanded(child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: const TextStyle(color: Colors.white,
-                    fontWeight: FontWeight.bold, fontSize: 15)),
+                // Tap the name → jump to this alert in the Alerts list.
+                GestureDetector(
+                  onTap: () => _goToAlertInList(a),
+                  child: Row(children: [
+                    Flexible(
+                      child: Text(title,
+                          style: const TextStyle(color: Color(0xFF4FC3F7),
+                              fontWeight: FontWeight.bold, fontSize: 15,
+                              decoration: TextDecoration.underline,
+                              decorationColor: Color(0xFF4FC3F7))),
+                    ),
+                    const SizedBox(width: 4),
+                    const Icon(Icons.arrow_outward,
+                        color: Color(0xFF4FC3F7), size: 14),
+                  ]),
+                ),
                 if (subtitle.isNotEmpty)
                   Text(subtitle, style: const TextStyle(
                       color: Color(0xFF90A4AE), fontSize: 12)),
@@ -1331,8 +1405,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // ── List tab ───────────────────────────────────────────────────────────────
-  Widget _listTab() {
-    final allAlerts = [
+  // The alerts list in display order (respects filter toggles, sorted by
+  // distance). Shared by the list tab and the map "jump to alert" scroll.
+  List<_MixedAlert> _sortedMixedAlerts() {
+    return [
       if (_showMissing)
         ..._missingAlerts.map((a) => _MixedAlert(
               type: 'missing', color: a.severityColor,
@@ -1384,6 +1460,10 @@ class _HomeScreenState extends State<HomeScreen> {
               original: a,
             )),
     ]..sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
+  }
+
+  Widget _listTab() {
+    final allAlerts = _sortedMixedAlerts();
 
     if (_loading) {
       return const Center(
@@ -1409,6 +1489,7 @@ class _HomeScreenState extends State<HomeScreen> {
       onRefresh: _loadAll,
       color: const Color(0xFF4FC3F7),
       child: ListView.builder(
+        controller: _listScroll,
         padding: const EdgeInsets.all(12),
         itemCount: allAlerts.length,
         itemBuilder: (_, i) => _mixedAlertCard(allAlerts[i]),
@@ -1417,16 +1498,25 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _mixedAlertCard(_MixedAlert a) {
+    final key = _alertKey(a.original);
+    final itemKey = _listItemKeys.putIfAbsent(key, () => GlobalKey());
+    final highlighted = _highlightedKey == key;
     return GestureDetector(
+      key: itemKey,
       // Tap the card body → show full details.
       onTap: () => _showAlertDetails(a.original),
-      child: Container(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: const Color(0xFF1C2F3F),
+          color: highlighted
+              ? a.color.withValues(alpha: 0.18)
+              : const Color(0xFF1C2F3F),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: a.color.withValues(alpha: 0.3)),
+          border: Border.all(
+              color: a.color.withValues(alpha: highlighted ? 0.9 : 0.3),
+              width: highlighted ? 1.5 : 1),
         ),
         child: Row(children: [
           Container(
