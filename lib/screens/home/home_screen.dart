@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import '../../services/location_service.dart';
@@ -9,6 +12,7 @@ import '../../models/disaster_model.dart';
 import '../../models/crime_model.dart';
 import '../../models/traffic_model.dart';
 import '../../models/health_model.dart';
+import '../../models/map_layers.dart';
 import '../../services/api_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/notification_poller.dart';
@@ -19,6 +23,7 @@ import '../report/traffic_report_screen.dart';
 import '../report/health_report_screen.dart';
 import '../report/disaster_report_screen.dart';
 import '../report/snap_incident_screen.dart';
+import '../report/location_picker_screen.dart';
 import '../notifications/notifications_screen.dart';
 import 'alert_detail_screen.dart';
 import 'alert_tip_sheet.dart';
@@ -33,6 +38,9 @@ class _HomeScreenState extends State<HomeScreen> {
   final _api = ApiService();
   // 0 = Map, 1 = Alerts list, 2 = Review (authority only)
   int _navIndex = 0;
+
+  // Controls the map camera so "view on map" can fly to an alert.
+  final MapController _mapController = MapController();
 
   // Alerts-list scrolling + "jump to this alert" highlight
   final ScrollController _listScroll = ScrollController();
@@ -70,6 +78,26 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // Current user id — used to show "resolve my alert" on alerts I reported.
   int? _myUserId;
+
+  // Selected base map (street / satellite / terrain / dark)
+  int _baseLayer = 0;
+
+  // Live drive mode — follows GPS and warns about alerts ahead on the road.
+  bool _driveMode = false;
+  StreamSubscription<Position>? _posSub;
+  double? _heading;                 // degrees, direction of travel
+  double _speed = 0;                // m/s
+  List<_AheadAlert> _aheadAlerts = []; // alerts in the cone ahead, nearest first
+  final Set<String> _warnedKeys = {};  // alerts already announced this session
+  static const double _warnRadiusM = 2000;   // look this far ahead
+  static const double _coneHalfAngle = 45;   // ± degrees around heading
+  static const double _announceM = 700;      // notify when this close
+
+  // Detour routing overlay (normal vs incident-avoiding route)
+  List<LatLng>? _routeNormal;
+  List<LatLng>? _routeDetour;
+  Map<String, dynamic>? _routeInfo; // distances, durations, avoided list
+  bool _routing = false;
 
   // Authority review queue (role-gated)
   bool _isAuthority = false;
@@ -206,7 +234,9 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _poller.stop();
+    _posSub?.cancel();
     _listScroll.dispose();
+    _mapController.dispose();
     super.dispose();
   }
 
@@ -552,6 +582,104 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Widget _driveBanner() {
+    if (_aheadAlerts.isEmpty) {
+      return _bannerBox(
+        color: const Color(0xFF66BB6A),
+        icon: Icons.check_circle,
+        title: 'Road ahead is clear',
+        subtitle: _speed >= 1.5
+            ? 'No hazards within ${(_warnRadiusM / 1000).toStringAsFixed(0)} km ahead'
+            : 'Start moving — warnings appear as you drive',
+      );
+    }
+    final n = _aheadAlerts.first;
+    final more = _aheadAlerts.length - 1;
+    return _bannerBox(
+      color: n.color,
+      icon: n.icon,
+      title: '${n.typeLabel} · ${_fmtDist(n.distanceM)} ahead',
+      subtitle: more > 0
+          ? '${n.title}  ·  +$more more ahead'
+          : n.title,
+      onTap: () => _goToAlertInList(n.original),
+    );
+  }
+
+  Widget _bannerBox({
+    required Color color,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    VoidCallback? onTap,
+  }) =>
+      GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xF01C2F3F),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: color, width: 1.2),
+          ),
+          child: Row(children: [
+            Icon(icon, color: color, size: 26),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: TextStyle(color: color,
+                          fontWeight: FontWeight.bold, fontSize: 14)),
+                  Text(subtitle,
+                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          color: Color(0xFF90A4AE), fontSize: 12)),
+                ],
+              ),
+            ),
+          ]),
+        ),
+      );
+
+  void _showLayerPicker() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1C2F3F),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const SizedBox(height: 12),
+          const Text('Map style',
+              style: TextStyle(color: Colors.white,
+                  fontSize: 15, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          for (var i = 0; i < kBaseLayers.length; i++)
+            ListTile(
+              leading: Icon(kBaseLayers[i].icon,
+                  color: i == _baseLayer
+                      ? const Color(0xFF4FC3F7) : const Color(0xFF90A4AE)),
+              title: Text(kBaseLayers[i].name,
+                  style: TextStyle(
+                      color: i == _baseLayer
+                          ? const Color(0xFF4FC3F7) : Colors.white)),
+              trailing: i == _baseLayer
+                  ? const Icon(Icons.check, color: Color(0xFF4FC3F7), size: 18)
+                  : null,
+              onTap: () {
+                setState(() => _baseLayer = i);
+                Navigator.pop(ctx);
+              },
+            ),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
+  }
+
   // ── Map tab ────────────────────────────────────────────────────────────────
   Widget _mapTab() {
     if (_loading) {
@@ -561,6 +689,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Stack(children: [
       FlutterMap(
+        mapController: _mapController,
         options: MapOptions(
           initialCenter: _userLocation,
           initialZoom: 12,
@@ -570,20 +699,38 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         children: [
           TileLayer(
-            urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+            urlTemplate: kBaseLayers[_baseLayer].urlTemplate,
+            subdomains: kBaseLayers[_baseLayer].subdomains,
             userAgentPackageName: 'com.citizenalert.mobile',
+            maxZoom: kBaseLayers[_baseLayer].maxZoom.toDouble(),
           ),
           // Affected areas (CAP-style): drawn polygon when present,
           // otherwise a severity-default circle. Rendered under the markers.
           PolygonLayer(polygons: _affectedPolygons()),
           CircleLayer(circles: _affectedCircles()),
+          // Detour routing overlay: grey = normal route, green = incident-
+          // avoiding route.
+          PolylineLayer(polylines: [
+            if (_routeNormal != null)
+              Polyline(points: _routeNormal!,
+                  strokeWidth: 4, color: const Color(0xB0EF5350)),
+            if (_routeDetour != null)
+              Polyline(points: _routeDetour!,
+                  strokeWidth: 5, color: const Color(0xFF66BB6A)),
+          ]),
           MarkerLayer(markers: [
-            // User location
+            // User location — heading arrow while driving, crosshair otherwise
             Marker(
               point: _userLocation,
-              width: 40, height: 40,
-              child: const Icon(Icons.my_location,
-                  color: Color(0xFF4FC3F7), size: 32),
+              width: 44, height: 44,
+              child: _driveMode
+                  ? Transform.rotate(
+                      angle: ((_heading ?? 0) * math.pi / 180),
+                      child: const Icon(Icons.navigation,
+                          color: Color(0xFF66BB6A), size: 38),
+                    )
+                  : const Icon(Icons.my_location,
+                      color: Color(0xFF4FC3F7), size: 32),
             ),
 
             // Missing persons
@@ -641,7 +788,8 @@ class _HomeScreenState extends State<HomeScreen> {
           child: _selectedCard(_selected!),
         ),
 
-      // Total count badge
+      // Total count badge (hidden in drive mode — the hazard banner takes over)
+      if (!_driveMode)
       Positioned(
         top: 12, right: 12,
         child: Container(
@@ -657,7 +805,121 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ),
+
+      // Base-layer switcher (street / satellite / terrain / dark)
+      Positioned(
+        bottom: 90, right: 12,
+        child: FloatingActionButton.small(
+          heroTag: 'layers',
+          backgroundColor: const Color(0xFF1C2F3F),
+          foregroundColor: const Color(0xFF4FC3F7),
+          onPressed: _showLayerPicker,
+          child: Icon(kBaseLayers[_baseLayer].icon),
+        ),
+      ),
+
+      // Live drive-mode toggle
+      Positioned(
+        bottom: 142, right: 12,
+        child: FloatingActionButton.small(
+          heroTag: 'drive',
+          backgroundColor:
+              _driveMode ? const Color(0xFF66BB6A) : const Color(0xFF1C2F3F),
+          foregroundColor:
+              _driveMode ? const Color(0xFF0D1B2A) : const Color(0xFF4FC3F7),
+          onPressed: _toggleDriveMode,
+          child: Icon(_driveMode ? Icons.navigation : Icons.navigation_outlined),
+        ),
+      ),
+
+      // Drive-mode "hazards ahead" banner
+      if (_driveMode)
+        Positioned(top: 12, left: 12, right: 12, child: _driveBanner()),
+
+      // Routing progress / result card
+      if (_routing)
+        const Positioned(
+          top: 12, left: 12,
+          child: Card(
+            color: Color(0xFF1C2F3F),
+            child: Padding(
+              padding: EdgeInsets.all(12),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                SizedBox(width: 16, height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Color(0xFF4FC3F7))),
+                SizedBox(width: 10),
+                Text('Computing safe route…',
+                    style: TextStyle(color: Colors.white, fontSize: 12)),
+              ]),
+            ),
+          ),
+        ),
+      if (_routeInfo != null && !_routing)
+        Positioned(top: 12, left: 12, child: _routeCard()),
     ]);
+  }
+
+  // Summary card for the computed routes (top-left of the map).
+  Widget _routeCard() {
+    final info = _routeInfo!;
+    final normal = info['normal'] as Map<String, dynamic>?;
+    final detour = info['detour'] as Map<String, dynamic>?;
+    final avoided = (info['avoided'] as List?) ?? [];
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      constraints: const BoxConstraints(maxWidth: 250),
+      decoration: BoxDecoration(
+        color: const Color(0xF01C2F3F),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF2A3F52)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            const Icon(Icons.alt_route, color: Color(0xFF66BB6A), size: 16),
+            const SizedBox(width: 6),
+            const Expanded(
+              child: Text('Incident-aware route',
+                  style: TextStyle(color: Colors.white,
+                      fontWeight: FontWeight.bold, fontSize: 13)),
+            ),
+            GestureDetector(
+              onTap: _clearRoute,
+              child: const Icon(Icons.close, color: Color(0xFF90A4AE), size: 16),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          if (normal != null)
+            Text(
+              detour == null
+                  ? (info['detour_note'] != null
+                      ? '⚠ ${normal['distance_km']} km · ${normal['duration_min']} min '
+                        '— ${info['detour_note']}'
+                      : '✓ ${normal['distance_km']} km · ${normal['duration_min']} min '
+                        '— no incidents on the way')
+                  : '⚠ Normal: ${normal['distance_km']} km · '
+                    '${normal['duration_min']} min (through incident zone)',
+              style: TextStyle(
+                  color: detour == null && info['detour_note'] == null
+                      ? const Color(0xFF66BB6A) : const Color(0xFFEF5350),
+                  fontSize: 11.5),
+            ),
+          if (detour != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              '✓ Detour: ${detour['distance_km']} km · '
+              '${detour['duration_min']} min (avoids '
+              '${avoided.length} incident${avoided.length == 1 ? '' : 's'})',
+              style: const TextStyle(color: Color(0xFF66BB6A), fontSize: 11.5),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   // ── Affected-area overlays ───────────────────────────────────────────────────
@@ -1199,6 +1461,30 @@ class _HomeScreenState extends State<HomeScreen> {
                       Navigator.pop(ctx);
                       _confirmDisaster(a);
                     }),
+                  // Incident-aware detour: only meaningful for zones you
+                  // would drive around (traffic & disaster).
+                  if (isTraffic || isDisaster) ...[
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          _routeAround();
+                        },
+                        icon: const Icon(Icons.alt_route, size: 16),
+                        label: const Text('Route around this incident',
+                            style: TextStyle(fontSize: 13)),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF66BB6A),
+                          side: const BorderSide(color: Color(0xFF66BB6A)),
+                          padding: const EdgeInsets.symmetric(vertical: 11),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                        ),
+                      ),
+                    ),
+                  ],
                   if (isCrime || isHealth)
                     SizedBox(
                       width: double.infinity,
@@ -1560,9 +1846,18 @@ class _HomeScreenState extends State<HomeScreen> {
                           color: Color(0xFF4FC3F7),
                           fontWeight: FontWeight.bold,
                           fontSize: 12)),
-                  const SizedBox(height: 4),
-                  const Icon(Icons.map_outlined,
-                      color: Color(0xFF4FC3F7), size: 18),
+                  const SizedBox(height: 6),
+                  Container(
+                    padding: const EdgeInsets.all(7),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF4FC3F7).withValues(alpha: 0.15),
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                          color: const Color(0xFF4FC3F7), width: 0.8),
+                    ),
+                    child: const Icon(Icons.map_outlined,
+                        color: Color(0xFF4FC3F7), size: 26),
+                  ),
                 ],
               ),
             ),
@@ -1577,7 +1872,190 @@ class _HomeScreenState extends State<HomeScreen> {
       _selected = original;
       _navIndex = 0;
     });
+    // Move the camera after the map tab is visible. The map lives inside an
+    // IndexedStack so it's already built; the post-frame wait just guarantees
+    // the tab switch has rendered before we fly to the alert.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      try {
+        _mapController.move(
+          LatLng(original.latitude, original.longitude),
+          15.5,
+        );
+      } catch (_) {/* map not ready yet — marker is still selected */}
+    });
   }
+
+  // ── Detour routing ───────────────────────────────────────────────────────────
+  // "Route around this incident": pick a destination, then draw the normal
+  // route vs the route avoiding all active traffic/disaster affected areas.
+  Future<void> _routeAround() async {
+    final dest = await Navigator.push<LatLng>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => LocationPickerScreen(
+          initial: _userLocation,
+          title: 'Select your destination',
+        ),
+      ),
+    );
+    if (dest == null || !mounted) return;
+
+    setState(() { _routing = true; _navIndex = 0; _selected = null; });
+    try {
+      final res = await _api.getDetour(
+        startLat: _userLocation.latitude, startLng: _userLocation.longitude,
+        endLat: dest.latitude, endLng: dest.longitude,
+      );
+      List<LatLng>? parse(dynamic route) {
+        if (route == null) return null;
+        final coords = route['coordinates'] as List;
+        return coords
+            .map((c) => LatLng((c[0] as num).toDouble(), (c[1] as num).toDouble()))
+            .toList();
+      }
+      final normal = parse(res['normal']);
+      final detour = parse(res['detour']);
+      if (!mounted) return;
+      setState(() {
+        _routeNormal = normal;
+        _routeDetour = detour;
+        _routeInfo = res;
+        _routing = false;
+      });
+      // Fit the camera around the whole route.
+      final pts = [...?normal, ...?detour];
+      if (pts.isNotEmpty) {
+        try {
+          _mapController.fitCamera(CameraFit.bounds(
+            bounds: LatLngBounds.fromPoints(pts),
+            padding: const EdgeInsets.all(48),
+          ));
+        } catch (_) {}
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _routing = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not compute a route — try again'),
+            backgroundColor: Color(0xFF1C2F3F)),
+      );
+    }
+  }
+
+  void _clearRoute() {
+    setState(() { _routeNormal = null; _routeDetour = null; _routeInfo = null; });
+  }
+
+  // ── Live drive mode ──────────────────────────────────────────────────────────
+  Future<void> _toggleDriveMode() async {
+    if (_driveMode) { _stopDrive(); return; }
+    // Make sure we have permission / GPS before starting the stream.
+    final res = await LocationService.getCurrentLocation();
+    if (!mounted) return;
+    if (!res.ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(res.error ?? 'Location unavailable'),
+            backgroundColor: const Color(0xFF1C2F3F)),
+      );
+      return;
+    }
+    setState(() {
+      _driveMode = true;
+      _navIndex = 0;
+      _selected = null;
+      _warnedKeys.clear();
+      _userLocation = LatLng(res.latitude!, res.longitude!);
+    });
+    _posSub = LocationService.positionStream().listen(_onDrivePosition);
+    _onDrivePosition(Position(
+      latitude: res.latitude!, longitude: res.longitude!,
+      timestamp: DateTime.now(), accuracy: 0, altitude: 0, altitudeAccuracy: 0,
+      heading: -1, headingAccuracy: 0, speed: 0, speedAccuracy: 0));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Drive mode on — warning about hazards ahead'),
+          backgroundColor: Color(0xFF1C2F3F)),
+    );
+  }
+
+  void _stopDrive() {
+    _posSub?.cancel();
+    _posSub = null;
+    if (mounted) {
+      setState(() {
+        _driveMode = false;
+        _aheadAlerts = [];
+        _heading = null;
+      });
+    }
+  }
+
+  void _onDrivePosition(Position p) {
+    if (!mounted) return;
+    final pos = LatLng(p.latitude, p.longitude);
+    final ahead = _computeAhead(pos, p.heading, p.speed);
+    setState(() {
+      _userLocation = pos;
+      _heading = p.heading >= 0 ? p.heading : _heading;
+      _speed = p.speed;
+      _aheadAlerts = ahead;
+    });
+    // Follow the driver.
+    try { _mapController.move(pos, 16); } catch (_) {}
+    // Announce the nearest not-yet-warned hazard once it's close.
+    for (final a in ahead) {
+      if (a.distanceM <= _announceM && !_warnedKeys.contains(a.key)) {
+        _warnedKeys.add(a.key);
+        NotificationService.instance.show(
+          id: a.key.hashCode & 0x7fffffff,
+          title: '⚠ ${a.typeLabel} ahead',
+          body: '${a.title} — ${_fmtDist(a.distanceM)} ahead on your route',
+        );
+        break; // one at a time
+      }
+    }
+  }
+
+  // Alerts within the cone ahead of the direction of travel, nearest first.
+  List<_AheadAlert> _computeAhead(LatLng pos, double heading, double speed) {
+    // Direction is unreliable when stationary → fall back to nearest-around.
+    final useCone = heading >= 0 && speed >= 1.5;
+    final out = <_AheadAlert>[];
+    for (final m in _sortedMixedAlerts()) {
+      // Only road-relevant hazards.
+      if (m.type == 'missing') continue;
+      final o = m.original;
+      final aPos = LatLng(o.latitude, o.longitude);
+      final dist = Geolocator.distanceBetween(
+          pos.latitude, pos.longitude, aPos.latitude, aPos.longitude);
+      if (dist > _warnRadiusM) continue;
+      if (useCone) {
+        final bearing = Geolocator.bearingBetween(
+            pos.latitude, pos.longitude, aPos.latitude, aPos.longitude);
+        if (_angleDiff(heading, bearing) > _coneHalfAngle) continue;
+      }
+      out.add(_AheadAlert(
+        key: _alertKey(o), title: m.title, typeLabel: _typeLabelFor(m.type),
+        color: m.color, icon: m.icon, distanceM: dist, original: o));
+    }
+    out.sort((a, b) => a.distanceM.compareTo(b.distanceM));
+    return out;
+  }
+
+  double _angleDiff(double a, double b) {
+    var d = (a - b).abs() % 360;
+    return d > 180 ? 360 - d : d;
+  }
+
+  String _typeLabelFor(String t) => switch (t) {
+        'traffic' => 'Traffic hazard',
+        'disaster' => 'Disaster',
+        'crime' => 'Crime',
+        'health' => 'Health alert',
+        _ => 'Alert',
+      };
+
+  String _fmtDist(double m) =>
+      m >= 1000 ? '${(m / 1000).toStringAsFixed(1)} km' : '${m.round()} m';
 
   String _fmtDate(String iso) {
     final dt = DateTime.tryParse(iso);
@@ -1937,6 +2415,27 @@ class _HomeScreenState extends State<HomeScreen> {
             style: TextStyle(
                 color: color, fontSize: 10, fontWeight: FontWeight.bold)),
       );
+}
+
+// A road-relevant alert lying ahead of the driver, with its distance.
+class _AheadAlert {
+  final String key;
+  final String title;
+  final String typeLabel;
+  final Color color;
+  final IconData icon;
+  final double distanceM;
+  final dynamic original;
+
+  _AheadAlert({
+    required this.key,
+    required this.title,
+    required this.typeLabel,
+    required this.color,
+    required this.icon,
+    required this.distanceM,
+    required this.original,
+  });
 }
 
 // ── Helper class for unified list ─────────────────────────────────────────────

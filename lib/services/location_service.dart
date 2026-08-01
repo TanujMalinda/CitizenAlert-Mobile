@@ -65,6 +65,17 @@ class LocationService {
     }
   }
 
+  /// Live position stream for drive mode — emits as the device moves.
+  /// Includes heading (direction of travel) and speed.
+  static Stream<Position> positionStream() {
+    return Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 5, // emit after ~5 m of movement
+      ),
+    );
+  }
+
   /// Opens the OS app-settings page so the user can grant permission manually.
   static Future<void> openSettings() => Geolocator.openAppSettings();
 }

@@ -283,6 +283,25 @@ Future<Map<String, dynamic>> confirmDisaster(int alertId) async {
     return res.data;
   }
 
+  // ── Routing ─────────────────────────────────────────────────────────────────
+
+  /// Incident-aware routing: normal route + a detour that avoids active
+  /// traffic/disaster affected areas.
+  Future<Map<String, dynamic>> getDetour({
+    required double startLat,
+    required double startLng,
+    required double endLat,
+    required double endLng,
+  }) async {
+    final res = await _dio.post('/routing/detour', data: {
+      'start_lat': startLat,
+      'start_lng': startLng,
+      'end_lat': endLat,
+      'end_lng': endLng,
+    });
+    return res.data;
+  }
+
   // ── Vision AI ────────────────────────────────────────────────────────────────
 
   /// Classify an incident photo with the trained model.

@@ -294,6 +294,17 @@ class _SnapIncidentScreenState extends State<SnapIncidentScreen> {
             const Text('(demo prediction — trained model not installed yet)',
                 style: TextStyle(color: Color(0xFF4A6070), fontSize: 11)),
           ],
+          if (r['fusion'] == 'clip_veto') ...[
+            const SizedBox(height: 6),
+            const Text('Cross-checked by a second AI model, which disagreed — '
+                'suggestion updated accordingly.',
+                style: TextStyle(color: Color(0xFF4A6070), fontSize: 11)),
+          ],
+          if (r['fusion'] == 'agree') ...[
+            const SizedBox(height: 6),
+            const Text('Confirmed by a second AI model ✓',
+                style: TextStyle(color: Color(0xFF4A6070), fontSize: 11)),
+          ],
           const SizedBox(height: 14),
 
           // Confident → primary green Continue button
