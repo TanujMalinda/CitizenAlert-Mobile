@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import '../../services/api_service.dart';
+import '../../services/draft_service.dart';
 import '../../services/location_service.dart';
 import '../../widgets/photo_picker_field.dart';
 import 'location_picker_screen.dart';
@@ -33,6 +34,9 @@ class _DisasterReportScreenState extends State<DisasterReportScreen> {
   bool    _submitting = false;
   String? _photoDataUri;
 
+  final _draft = FormDraft('disaster_report');
+  int _photoRev = 0;
+
   static const _hazardTypes = [
     'flood', 'tsunami', 'cyclone', 'earthquake',
     'landslide', 'fire', 'drought', 'storm',
@@ -58,16 +62,82 @@ class _DisasterReportScreenState extends State<DisasterReportScreen> {
     if (widget.initialType != null && _hazardTypes.contains(widget.initialType)) {
       _hazardType = widget.initialType!;
     }
+    for (final c in [_titleCtrl, _descCtrl, _affectedAreaCtrl, _evacuationCtrl]) {
+      c.addListener(_saveDraft);
+    }
+    _restoreDraft();
     _getLocation();
   }
 
   @override
   void dispose() {
+    _draft.dispose();
     _titleCtrl.dispose();
     _descCtrl.dispose();
     _affectedAreaCtrl.dispose();
     _evacuationCtrl.dispose();
     super.dispose();
+  }
+
+  Map<String, dynamic> _collectDraft() => {
+        'title':         _titleCtrl.text,
+        'description':   _descCtrl.text,
+        'affected_area': _affectedAreaCtrl.text,
+        'evacuation':    _evacuationCtrl.text,
+        'hazard_type':   _hazardType,
+        'severity':      _severity,
+        'district':      _district,
+        'photo':         _photoDataUri,
+      };
+
+  void _saveDraft() => _draft.scheduleSave(_collectDraft);
+
+  Future<void> _restoreDraft() async {
+    final d = await _draft.load(meaningfulFields: [
+      'title', 'description', 'affected_area', 'evacuation', 'photo',
+    ]);
+    if (d == null || !mounted) return;
+    setState(() {
+      _titleCtrl.text        = d['title'] ?? '';
+      _descCtrl.text         = d['description'] ?? '';
+      _affectedAreaCtrl.text = d['affected_area'] ?? '';
+      _evacuationCtrl.text   = d['evacuation'] ?? '';
+      if (_hazardTypes.contains(d['hazard_type'])) _hazardType = d['hazard_type'];
+      if (_severities.contains(d['severity']))     _severity   = d['severity'];
+      if (_districts.contains(d['district']))      _district   = d['district'];
+      if (widget.initialPhoto == null && d['photo'] != null) {
+        _photoDataUri = d['photo'];
+        _photoRev++;
+      }
+    });
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Unfinished report restored'),
+        backgroundColor: const Color(0xFF1C2F3F),
+        action: SnackBarAction(
+          label: 'Discard',
+          textColor: _accent,
+          onPressed: _discardDraft,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _discardDraft() async {
+    await _draft.clear();
+    if (!mounted) return;
+    setState(() {
+      _titleCtrl.clear();
+      _descCtrl.clear();
+      _affectedAreaCtrl.clear();
+      _evacuationCtrl.clear();
+      _hazardType   = widget.initialType ?? 'flood';
+      _severity     = 'severe';
+      _district     = 'Colombo';
+      _photoDataUri = widget.initialPhoto;
+      _photoRev++;
+    });
   }
 
   Future<void> _getLocation() async {
@@ -108,6 +178,7 @@ class _DisasterReportScreenState extends State<DisasterReportScreen> {
         'photo_url':         _photoDataUri,
       });
 
+      await _draft.clear();
       if (!mounted) return;
       _showResult(result);
     } catch (e) {
@@ -228,7 +299,10 @@ class _DisasterReportScreenState extends State<DisasterReportScreen> {
                   label: 'Hazard Type',
                   value: _hazardType,
                   items: _hazardTypes,
-                  onChanged: (v) => setState(() => _hazardType = v!),
+                  onChanged: (v) {
+                    setState(() => _hazardType = v!);
+                    _saveDraft();
+                  },
                 ),
               ),
               const SizedBox(width: 12),
@@ -237,7 +311,10 @@ class _DisasterReportScreenState extends State<DisasterReportScreen> {
                   label: 'Severity',
                   value: _severity,
                   items: _severities,
-                  onChanged: (v) => setState(() => _severity = v!),
+                  onChanged: (v) {
+                    setState(() => _severity = v!);
+                    _saveDraft();
+                  },
                 ),
               ),
             ]),
@@ -272,9 +349,10 @@ class _DisasterReportScreenState extends State<DisasterReportScreen> {
             _sectionLabel('PHOTO EVIDENCE'),
             const SizedBox(height: 8),
             PhotoPickerField(
-              onChanged: (v) => _photoDataUri = v,
+              key: ValueKey('disaster_photo_$_photoRev'),
+              onChanged: (v) { _photoDataUri = v; _saveDraft(); },
               label: 'Add a photo of the scene (optional)',
-              initialDataUri: widget.initialPhoto,
+              initialDataUri: _photoDataUri,
             ),
             const SizedBox(height: 20),
 
@@ -285,7 +363,10 @@ class _DisasterReportScreenState extends State<DisasterReportScreen> {
               label: 'District',
               value: _district,
               items: _districts,
-              onChanged: (v) => setState(() => _district = v!),
+              onChanged: (v) {
+                setState(() => _district = v!);
+                _saveDraft();
+              },
             ),
             const SizedBox(height: 8),
 

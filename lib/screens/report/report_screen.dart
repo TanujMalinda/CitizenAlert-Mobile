@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 import '../../services/api_service.dart';
+import '../../services/draft_service.dart';
 import '../../services/location_service.dart';
 import 'location_picker_screen.dart';
 
@@ -19,6 +21,9 @@ class _ReportScreenState extends State<ReportScreen> {
   final _descCtrl     = TextEditingController();
   final _locationCtrl = TextEditingController();
   final _districtCtrl = TextEditingController();
+  final _ageCtrl      = TextEditingController();
+
+  final _draft = FormDraft('missing_person_report');
 
   int?    _age;
   String  _gender     = 'male';
@@ -33,14 +38,102 @@ class _ReportScreenState extends State<ReportScreen> {
   bool    _success    = false;
 
   // Photo of the missing person (optional)
-  File?   _photoFile;
+  File?      _photoFile;
+  Uint8List? _photoBytes;  // preview for a photo restored from a saved draft
   String? _photoDataUri; // "data:image/jpeg;base64,..." sent as photo_url
   final ImagePicker _picker = ImagePicker();
+
+  bool get _hasPhoto => _photoFile != null || _photoBytes != null;
 
   @override
   void initState() {
     super.initState();
+    for (final c in [_nameCtrl, _descCtrl, _locationCtrl, _districtCtrl, _ageCtrl]) {
+      c.addListener(_saveDraft);
+    }
+    _restoreDraft();
     _getLocation();
+  }
+
+  @override
+  void dispose() {
+    _draft.dispose();
+    _nameCtrl.dispose();
+    _descCtrl.dispose();
+    _locationCtrl.dispose();
+    _districtCtrl.dispose();
+    _ageCtrl.dispose();
+    super.dispose();
+  }
+
+  Map<String, dynamic> _collectDraft() => {
+        'name':     _nameCtrl.text,
+        'desc':     _descCtrl.text,
+        'location': _locationCtrl.text,
+        'district': _districtCtrl.text,
+        'age':      _ageCtrl.text,
+        'gender':   _gender,
+        'lat':      _lat,
+        'lng':      _lng,
+        'photo':    _photoDataUri,
+      };
+
+  void _saveDraft() => _draft.scheduleSave(_collectDraft);
+
+  Future<void> _restoreDraft() async {
+    final d = await _draft.load(meaningfulFields: [
+      'name', 'desc', 'location', 'district', 'age', 'photo',
+    ]);
+    if (d == null || !mounted) return;
+    setState(() {
+      _nameCtrl.text     = d['name'] ?? '';
+      _descCtrl.text     = d['desc'] ?? '';
+      _locationCtrl.text = d['location'] ?? '';
+      _districtCtrl.text = d['district'] ?? '';
+      _ageCtrl.text      = d['age'] ?? '';
+      _age               = int.tryParse(_ageCtrl.text);
+      if (['male', 'female', 'other'].contains(d['gender'])) _gender = d['gender'];
+      _lat = (d['lat'] as num?)?.toDouble();
+      _lng = (d['lng'] as num?)?.toDouble();
+      final photo = d['photo'] as String?;
+      if (photo != null && photo.startsWith('data:image')) {
+        try {
+          _photoBytes   = base64Decode(photo.split(',').last);
+          _photoDataUri = photo;
+        } catch (_) {/* ignore unreadable draft photo */}
+      }
+    });
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Unfinished report restored'),
+        backgroundColor: const Color(0xFF1C2F3F),
+        action: SnackBarAction(
+          label: 'Discard',
+          textColor: const Color(0xFF4FC3F7),
+          onPressed: _discardDraft,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _discardDraft() async {
+    await _draft.clear();
+    if (!mounted) return;
+    setState(() {
+      _nameCtrl.clear();
+      _descCtrl.clear();
+      _locationCtrl.clear();
+      _districtCtrl.clear();
+      _ageCtrl.clear();
+      _age = null;
+      _gender = 'male';
+      _lat = null;
+      _lng = null;
+      _photoFile = null;
+      _photoBytes = null;
+      _photoDataUri = null;
+    });
   }
 
   Future<void> _getLocation() async {
@@ -74,6 +167,7 @@ class _ReportScreenState extends State<ReportScreen> {
         _lng = result.longitude;
         _error = null;
       });
+      _saveDraft();
     }
   }
 
@@ -91,8 +185,10 @@ class _ReportScreenState extends State<ReportScreen> {
       if (!mounted) return;
       setState(() {
         _photoFile = File(picked.path);
+        _photoBytes = null;
         _photoDataUri = 'data:image/jpeg;base64,$b64';
       });
+      _saveDraft();
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = 'Could not load image');
@@ -120,14 +216,19 @@ class _ReportScreenState extends State<ReportScreen> {
                 style: TextStyle(color: Colors.white)),
             onTap: () { Navigator.pop(ctx); _pickImage(ImageSource.gallery); },
           ),
-          if (_photoFile != null)
+          if (_hasPhoto)
             ListTile(
               leading: const Icon(Icons.delete_outline, color: Color(0xFFEF5350)),
               title: const Text('Remove photo',
                   style: TextStyle(color: Color(0xFFEF5350))),
               onTap: () {
                 Navigator.pop(ctx);
-                setState(() { _photoFile = null; _photoDataUri = null; });
+                setState(() {
+                  _photoFile = null;
+                  _photoBytes = null;
+                  _photoDataUri = null;
+                });
+                _saveDraft();
               },
             ),
           const SizedBox(height: 8),
@@ -162,6 +263,8 @@ class _ReportScreenState extends State<ReportScreen> {
         'district':               _districtCtrl.text.trim(),
         'photo_url':              _photoDataUri,
       });
+      await _draft.clear();
+      if (!mounted) return;
       setState(() { _success = true; _submitting = false; });
     } catch (e) {
       setState(() {
@@ -229,7 +332,7 @@ class _ReportScreenState extends State<ReportScreen> {
         _field('Full name *', _nameCtrl, Icons.person_outline),
         const SizedBox(height: 12),
         Row(children: [
-          Expanded(child: _numberField('Age', (v) =>
+          Expanded(child: _numberField('Age', _ageCtrl, (v) =>
               setState(() => _age = int.tryParse(v)))),
           const SizedBox(width: 12),
           Expanded(child: _genderDropdown()),
@@ -289,16 +392,18 @@ class _ReportScreenState extends State<ReportScreen> {
           color: const Color(0xFF1C2F3F),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: _photoFile != null
+            color: _hasPhoto
                 ? const Color(0xFF4FC3F7)
                 : const Color(0xFF2A3F52),
-            width: _photoFile != null ? 1.5 : 0.5,
+            width: _hasPhoto ? 1.5 : 0.5,
           ),
         ),
         clipBehavior: Clip.antiAlias,
-        child: _photoFile != null
+        child: _hasPhoto
             ? Stack(fit: StackFit.expand, children: [
-                Image.file(_photoFile!, fit: BoxFit.cover),
+                _photoFile != null
+                    ? Image.file(_photoFile!, fit: BoxFit.cover)
+                    : Image.memory(_photoBytes!, fit: BoxFit.cover),
                 Positioned(
                   top: 8, right: 8,
                   child: Container(
@@ -395,8 +500,10 @@ class _ReportScreenState extends State<ReportScreen> {
         decoration: _dec(label, icon),
       );
 
-  Widget _numberField(String label, Function(String) onChanged) =>
+  Widget _numberField(String label, TextEditingController ctrl,
+          Function(String) onChanged) =>
       TextField(
+        controller: ctrl,
         keyboardType: TextInputType.number,
         style: const TextStyle(color: Colors.white),
         onChanged: onChanged,
@@ -411,7 +518,10 @@ class _ReportScreenState extends State<ReportScreen> {
         items: ['male', 'female', 'other']
             .map((g) => DropdownMenuItem(value: g, child: Text(g)))
             .toList(),
-        onChanged: (v) => setState(() => _gender = v ?? 'male'),
+        onChanged: (v) {
+          setState(() => _gender = v ?? 'male');
+          _saveDraft();
+        },
       );
 
   InputDecoration _dec(String label, IconData? icon) => InputDecoration(

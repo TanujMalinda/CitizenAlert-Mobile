@@ -1,4 +1,4 @@
-# mobile
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" connect 10.19.23.36:XXXXX# mobile
 
 A new Flutter project.
 

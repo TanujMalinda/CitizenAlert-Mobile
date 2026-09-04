@@ -166,7 +166,6 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
                       const Color(0xFF4FC3F7)),
                   _chip(a.tvmStatus.replaceAll('_', ' ').toUpperCase(),
                       const Color(0xFF66BB6A)),
-                  if (a.cctv) _chip('CCTV SIGNAL', const Color(0xFF66BB6A)),
                 ]),
               ],
             )),
@@ -349,8 +348,6 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
             _scoreRow('Location plausibility',
                 '${((components['location_plausibility'] as num) * 100).toInt()}%',
                 const Color(0xFF90A4AE)),
-          if ((components['cctv_boost'] ?? 0) > 0)
-            _scoreRow('CCTV boost', '+15%', const Color(0xFF66BB6A)),
           const SizedBox(height: 6),
           Text(r['message'] ?? '',
               style: const TextStyle(

@@ -2,10 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class ApiService {
-  // Using adb reverse tunnel (USB) — bypasses university WiFi client isolation.
-  // Tunnel set up with: adb reverse tcp:8000 tcp:8000
-  // The phone's localhost:8000 is forwarded to the laptop's backend over USB.
-  static const String baseUrl = 'http://localhost:8000/api';
+  static const String baseUrl = 'http://10.16.130.0:8000/api';
 
   final Dio _dio;
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
@@ -27,11 +24,17 @@ class ApiService {
   Future<Map<String, dynamic>> login(String email, String password) async {
     final res = await _dio.post('/auth/login',
         data: {'email': email, 'password': password});
-    await _storage.write(key: 'jwt_token', value: res.data['token']);
-    await _storage.write(key: 'user_id',   value: res.data['user']['id'].toString());
-    await _storage.write(key: 'user_role', value: res.data['user']['role']);
-    await _storage.write(key: 'user_name', value: res.data['user']['full_name']);
-    return res.data;
+    final data = res.data as Map<String, dynamic>;
+    final token = data['token'] ?? data['access_token'];
+    if (token == null) throw Exception('No token in login response');
+    await _storage.write(key: 'jwt_token', value: token.toString());
+    final user = data['user'] as Map<String, dynamic>?;
+    if (user != null) {
+      await _storage.write(key: 'user_id',   value: user['id']?.toString() ?? '');
+      await _storage.write(key: 'user_role', value: user['role']?.toString() ?? '');
+      await _storage.write(key: 'user_name', value: user['full_name']?.toString() ?? '');
+    }
+    return data;
   }
 
   Future<Map<String, dynamic>> register(Map<String, dynamic> data) async {

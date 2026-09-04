@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import '../../services/api_service.dart';
+import '../../services/draft_service.dart';
 import '../../services/location_service.dart';
 import '../../widgets/photo_picker_field.dart';
 import 'location_picker_screen.dart';
@@ -31,6 +32,10 @@ class _TrafficReportScreenState extends State<TrafficReportScreen> {
   bool    _submitting = false;
   String? _photoDataUri;
 
+  final _draft = FormDraft('traffic_report');
+  // Bumped when a saved photo is restored so PhotoPickerField re-reads it.
+  int _photoRev = 0;
+
   static const _hazardTypes = [
     'accident', 'road_closure', 'flooding',
     'obstruction', 'construction', 'pothole', 'landslide', 'other',
@@ -52,15 +57,82 @@ class _TrafficReportScreenState extends State<TrafficReportScreen> {
     if (widget.initialType != null && _hazardTypes.contains(widget.initialType)) {
       _hazardType = widget.initialType!;
     }
+    for (final c in [_titleCtrl, _descCtrl, _roadCtrl]) {
+      c.addListener(_saveDraft);
+    }
+    _restoreDraft();
     _getLocation();
   }
 
   @override
   void dispose() {
+    _draft.dispose();
     _titleCtrl.dispose();
     _descCtrl.dispose();
     _roadCtrl.dispose();
     super.dispose();
+  }
+
+  Map<String, dynamic> _collectDraft() => {
+        'title':       _titleCtrl.text,
+        'description': _descCtrl.text,
+        'road':        _roadCtrl.text,
+        'hazard_type': _hazardType,
+        'severity':    _severity,
+        'district':    _district,
+        'photo':       _photoDataUri,
+      };
+
+  void _saveDraft() => _draft.scheduleSave(_collectDraft);
+
+  Future<void> _restoreDraft() async {
+    final d = await _draft.load(
+        meaningfulFields: ['title', 'description', 'road', 'photo']);
+    if (d == null || !mounted) return;
+    setState(() {
+      _titleCtrl.text = d['title'] ?? '';
+      _descCtrl.text  = d['description'] ?? '';
+      _roadCtrl.text  = d['road'] ?? '';
+      if (_hazardTypes.contains(d['hazard_type'])) _hazardType = d['hazard_type'];
+      if (_severities.contains(d['severity']))     _severity   = d['severity'];
+      if (_districts.contains(d['district']))      _district   = d['district'];
+      // A photo passed in from Snap Incident takes priority over the draft.
+      if (widget.initialPhoto == null && d['photo'] != null) {
+        _photoDataUri = d['photo'];
+        _photoRev++;
+      }
+    });
+    _showDraftRestoredBar();
+  }
+
+  void _showDraftRestoredBar() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Unfinished report restored'),
+        backgroundColor: const Color(0xFF1C2F3F),
+        action: SnackBarAction(
+          label: 'Discard',
+          textColor: const Color(0xFFFF9800),
+          onPressed: _discardDraft,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _discardDraft() async {
+    await _draft.clear();
+    if (!mounted) return;
+    setState(() {
+      _titleCtrl.clear();
+      _descCtrl.clear();
+      _roadCtrl.clear();
+      _hazardType   = widget.initialType ?? 'accident';
+      _severity     = 'medium';
+      _district     = 'Colombo';
+      _photoDataUri = widget.initialPhoto;
+      _photoRev++;
+    });
   }
 
   Future<void> _getLocation() async {
@@ -194,6 +266,7 @@ class _TrafficReportScreenState extends State<TrafficReportScreen> {
         'photo_url':    _photoDataUri,
       });
 
+      await _draft.clear();
       if (!mounted) { return; }
       _showResult(result);
     } catch (e) {
@@ -321,7 +394,10 @@ class _TrafficReportScreenState extends State<TrafficReportScreen> {
                   label: 'Hazard Type',
                   value: _hazardType,
                   items: _hazardTypes,
-                  onChanged: (v) => setState(() => _hazardType = v!),
+                  onChanged: (v) {
+                    setState(() => _hazardType = v!);
+                    _saveDraft();
+                  },
                 ),
               ),
               const SizedBox(width: 12),
@@ -330,7 +406,10 @@ class _TrafficReportScreenState extends State<TrafficReportScreen> {
                   label: 'Severity',
                   value: _severity,
                   items: _severities,
-                  onChanged: (v) => setState(() => _severity = v!),
+                  onChanged: (v) {
+                    setState(() => _severity = v!);
+                    _saveDraft();
+                  },
                 ),
               ),
             ]),
@@ -356,9 +435,10 @@ class _TrafficReportScreenState extends State<TrafficReportScreen> {
             _sectionLabel('PHOTO EVIDENCE'),
             const SizedBox(height: 8),
             PhotoPickerField(
-              onChanged: (v) => _photoDataUri = v,
+              key: ValueKey('traffic_photo_$_photoRev'),
+              onChanged: (v) { _photoDataUri = v; _saveDraft(); },
               label: 'Add a photo of the hazard (optional)',
-              initialDataUri: widget.initialPhoto,
+              initialDataUri: _photoDataUri,
             ),
             const SizedBox(height: 20),
 
@@ -369,7 +449,10 @@ class _TrafficReportScreenState extends State<TrafficReportScreen> {
               label: 'District',
               value: _district,
               items: _districts,
-              onChanged: (v) => setState(() => _district = v!),
+              onChanged: (v) {
+                setState(() => _district = v!);
+                _saveDraft();
+              },
             ),
             const SizedBox(height: 8),
 

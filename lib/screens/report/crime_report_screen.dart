@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import '../../services/api_service.dart';
+import '../../services/draft_service.dart';
 import '../../services/location_service.dart';
 import '../../widgets/photo_picker_field.dart';
 import 'location_picker_screen.dart';
@@ -33,6 +34,9 @@ class _CrimeReportScreenState extends State<CrimeReportScreen> {
   bool    _anonymous    = false;
   String? _photoDataUri;
 
+  final _draft = FormDraft('crime_report');
+  int _photoRev = 0;
+
   static const _incidentTypes = [
     'theft', 'assault', 'robbery', 'vandalism',
     'fraud', 'suspicious_activity', 'burglary', 'other',
@@ -56,15 +60,82 @@ class _CrimeReportScreenState extends State<CrimeReportScreen> {
     if (widget.initialType != null && _incidentTypes.contains(widget.initialType)) {
       _incidentType = widget.initialType!;
     }
+    for (final c in [_titleCtrl, _descCtrl, _suspectCtrl]) {
+      c.addListener(_saveDraft);
+    }
+    _restoreDraft();
     _getLocation();
   }
 
   @override
   void dispose() {
+    _draft.dispose();
     _titleCtrl.dispose();
     _descCtrl.dispose();
     _suspectCtrl.dispose();
     super.dispose();
+  }
+
+  Map<String, dynamic> _collectDraft() => {
+        'title':         _titleCtrl.text,
+        'description':   _descCtrl.text,
+        'suspect':       _suspectCtrl.text,
+        'incident_type': _incidentType,
+        'severity':      _severity,
+        'district':      _district,
+        'anonymous':     _anonymous,
+        'photo':         _photoDataUri,
+      };
+
+  void _saveDraft() => _draft.scheduleSave(_collectDraft);
+
+  Future<void> _restoreDraft() async {
+    final d = await _draft.load(
+        meaningfulFields: ['title', 'description', 'suspect', 'photo']);
+    if (d == null || !mounted) return;
+    setState(() {
+      _titleCtrl.text   = d['title'] ?? '';
+      _descCtrl.text    = d['description'] ?? '';
+      _suspectCtrl.text = d['suspect'] ?? '';
+      if (_incidentTypes.contains(d['incident_type'])) {
+        _incidentType = d['incident_type'];
+      }
+      if (_severities.contains(d['severity'])) _severity = d['severity'];
+      if (_districts.contains(d['district']))  _district = d['district'];
+      _anonymous = d['anonymous'] == true;
+      if (widget.initialPhoto == null && d['photo'] != null) {
+        _photoDataUri = d['photo'];
+        _photoRev++;
+      }
+    });
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Unfinished report restored'),
+        backgroundColor: const Color(0xFF1C2F3F),
+        action: SnackBarAction(
+          label: 'Discard',
+          textColor: const Color(0xFFEF5350),
+          onPressed: _discardDraft,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _discardDraft() async {
+    await _draft.clear();
+    if (!mounted) return;
+    setState(() {
+      _titleCtrl.clear();
+      _descCtrl.clear();
+      _suspectCtrl.clear();
+      _incidentType = widget.initialType ?? 'theft';
+      _severity     = 'medium';
+      _district     = 'Colombo';
+      _anonymous    = false;
+      _photoDataUri = widget.initialPhoto;
+      _photoRev++;
+    });
   }
 
   Future<void> _getLocation() async {
@@ -104,6 +175,7 @@ class _CrimeReportScreenState extends State<CrimeReportScreen> {
         'anonymous':           _anonymous,
       });
 
+      await _draft.clear();
       if (!mounted) return;
       _showResult(result);
     } catch (e) {
@@ -231,7 +303,10 @@ class _CrimeReportScreenState extends State<CrimeReportScreen> {
                   label: 'Incident Type',
                   value: _incidentType,
                   items: _incidentTypes,
-                  onChanged: (v) => setState(() => _incidentType = v!),
+                  onChanged: (v) {
+                    setState(() => _incidentType = v!);
+                    _saveDraft();
+                  },
                 ),
               ),
               const SizedBox(width: 12),
@@ -240,7 +315,10 @@ class _CrimeReportScreenState extends State<CrimeReportScreen> {
                   label: 'Severity',
                   value: _severity,
                   items: _severities,
-                  onChanged: (v) => setState(() => _severity = v!),
+                  onChanged: (v) {
+                    setState(() => _severity = v!);
+                    _saveDraft();
+                  },
                 ),
               ),
             ]),
@@ -271,9 +349,10 @@ class _CrimeReportScreenState extends State<CrimeReportScreen> {
             _sectionLabel('PHOTO EVIDENCE'),
             const SizedBox(height: 8),
             PhotoPickerField(
-              onChanged: (v) => _photoDataUri = v,
+              key: ValueKey('crime_photo_$_photoRev'),
+              onChanged: (v) { _photoDataUri = v; _saveDraft(); },
               label: 'Add a photo of the scene (optional)',
-              initialDataUri: widget.initialPhoto,
+              initialDataUri: _photoDataUri,
             ),
             const SizedBox(height: 20),
 
@@ -284,7 +363,10 @@ class _CrimeReportScreenState extends State<CrimeReportScreen> {
               label: 'District',
               value: _district,
               items: _districts,
-              onChanged: (v) => setState(() => _district = v!),
+              onChanged: (v) {
+                setState(() => _district = v!);
+                _saveDraft();
+              },
             ),
             const SizedBox(height: 8),
 
@@ -312,7 +394,10 @@ class _CrimeReportScreenState extends State<CrimeReportScreen> {
                 ),
                 value: _anonymous,
                 activeThumbColor: const Color(0xFF4FC3F7),
-                onChanged: (v) => setState(() => _anonymous = v),
+                onChanged: (v) {
+                  setState(() => _anonymous = v);
+                  _saveDraft();
+                },
               ),
             ),
             const SizedBox(height: 16),

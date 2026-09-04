@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_map_marker_cluster/flutter_map_marker_cluster.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
@@ -346,11 +347,24 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _initLocation() async {
+    await _refreshLocation();
+    await _loadAll();
+  }
+
+  /// Re-acquires GPS. The first attempt at startup often fails or is still
+  /// waiting on the permission prompt, which used to leave [_userLocation]
+  /// pinned to the Colombo fallback for the whole session — so alerts more
+  /// than a radius away from Colombo never appeared, even after a refresh.
+  Future<void> _refreshLocation() async {
     final res = await LocationService.getCurrentLocation();
     if (mounted && res.ok) {
-      setState(() =>
-          _userLocation = LatLng(res.latitude!, res.longitude!));
+      setState(() => _userLocation = LatLng(res.latitude!, res.longitude!));
     }
+  }
+
+  /// Refresh the map/list from the device's *current* position.
+  Future<void> _refreshFromCurrentLocation() async {
+    await _refreshLocation();
     await _loadAll();
   }
 
@@ -458,7 +472,7 @@ class _HomeScreenState extends State<HomeScreen> {
         IconButton(
           icon: const Icon(Icons.refresh, color: Color(0xFF4FC3F7)),
           onPressed: () {
-            _loadAll();
+            _refreshFromCurrentLocation();
             if (_isAuthority) _loadPendingReviews();
           },
         ),
@@ -718,8 +732,9 @@ class _HomeScreenState extends State<HomeScreen> {
               Polyline(points: _routeDetour!,
                   strokeWidth: 5, color: const Color(0xFF66BB6A)),
           ]),
+          // User location sits in its own layer so it is never swallowed by a
+          // cluster and always stays visible.
           MarkerLayer(markers: [
-            // User location — heading arrow while driving, crosshair otherwise
             Marker(
               point: _userLocation,
               width: 44, height: 44,
@@ -732,7 +747,22 @@ class _HomeScreenState extends State<HomeScreen> {
                   : const Icon(Icons.my_location,
                       color: Color(0xFF4FC3F7), size: 32),
             ),
+          ]),
 
+          // Alerts stacked on the same street would otherwise hide each other,
+          // so nearby ones collapse into a numbered bubble. Tapping a bubble
+          // zooms to fit its alerts; at full zoom they fan out so each can be
+          // opened individually.
+          MarkerClusterLayerWidget(
+            options: MarkerClusterLayerOptions(
+              maxClusterRadius: 45,
+              size: const Size(40, 40),
+              padding: const EdgeInsets.all(50),
+              maxZoom: 16,
+              spiderfyCircleRadius: 60,
+              zoomToBoundsOnClick: true,
+              builder: (context, markers) => _clusterBubble(markers.length),
+              markers: [
             // Missing persons
             if (_showMissing)
               ..._missingAlerts.map((a) => _buildMarker(
@@ -777,7 +807,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon:   a.diseaseIcon,
                 onTap:  () => setState(() => _selected = a),
               )),
-          ]),
+              ],
+            ),
+          ),
         ],
       ),
 
@@ -1000,6 +1032,40 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       );
+
+  /// Bubble shown in place of alerts that overlap at the current zoom.
+  /// It grows and shifts colour with the number of alerts hidden inside, so a
+  /// dense district reads differently from a pair of alerts on one street.
+  Widget _clusterBubble(int count) {
+    final Color fill = count < 10
+        ? const Color(0xFF4FC3F7)          // a few
+        : count < 50
+            ? const Color(0xFFFFA726)      // busy
+            : const Color(0xFFEF5350);     // very dense
+    return Container(
+      decoration: BoxDecoration(
+        color: fill.withValues(alpha: 0.92),
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white.withValues(alpha: 0.9), width: 2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.35),
+            blurRadius: 6, offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Center(
+        child: Text(
+          '$count',
+          style: TextStyle(
+            color: count < 50 ? const Color(0xFF0D1B2A) : Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: count > 99 ? 12 : 14,
+          ),
+        ),
+      ),
+    );
+  }
 
   // ── Selected marker card ───────────────────────────────────────────────────
   Widget _selectedCard(dynamic a) {
@@ -1772,7 +1838,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     return RefreshIndicator(
-      onRefresh: _loadAll,
+      onRefresh: _refreshFromCurrentLocation,
       color: const Color(0xFF4FC3F7),
       child: ListView.builder(
         controller: _listScroll,
@@ -2252,7 +2318,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 Navigator.pop(context);
                 Navigator.push(context,
                     MaterialPageRoute(builder: (_) => const SnapIncidentScreen()))
-                    .then((_) => _loadAll());
+                    .then((_) => _refreshFromCurrentLocation());
               },
             ),
             const SizedBox(height: 10),
@@ -2265,7 +2331,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 Navigator.pop(context);
                 Navigator.push(context,
                     MaterialPageRoute(builder: (_) => const ReportScreen()))
-                    .then((_) => _loadAll());
+                    .then((_) => _refreshFromCurrentLocation());
               },
             ),
             const SizedBox(height: 10),
@@ -2279,7 +2345,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 Navigator.push(context,
                     MaterialPageRoute(
                         builder: (_) => const CrimeReportScreen()))
-                    .then((_) => _loadAll());
+                    .then((_) => _refreshFromCurrentLocation());
               },
             ),
             const SizedBox(height: 10),
@@ -2293,7 +2359,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 Navigator.push(context,
                     MaterialPageRoute(
                         builder: (_) => const TrafficReportScreen()))
-                    .then((_) => _loadAll());
+                    .then((_) => _refreshFromCurrentLocation());
               },
             ),
             const SizedBox(height: 10),
@@ -2307,7 +2373,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 Navigator.push(context,
                     MaterialPageRoute(
                         builder: (_) => const DisasterReportScreen()))
-                    .then((_) => _loadAll());
+                    .then((_) => _refreshFromCurrentLocation());
               },
             ),
             const SizedBox(height: 10),
@@ -2321,7 +2387,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 Navigator.push(context,
                     MaterialPageRoute(
                         builder: (_) => const HealthReportScreen()))
-                    .then((_) => _loadAll());
+                    .then((_) => _refreshFromCurrentLocation());
               },
             ),
           ],

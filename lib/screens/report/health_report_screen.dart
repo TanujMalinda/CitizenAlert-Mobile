@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import '../../services/api_service.dart';
+import '../../services/draft_service.dart';
 import '../../services/location_service.dart';
 import 'location_picker_screen.dart';
 
@@ -28,6 +29,8 @@ class _HealthReportScreenState extends State<HealthReportScreen> {
   String? _locError;
   bool    _submitting  = false;
 
+  final _draft = FormDraft('health_report');
+
   static const _diseaseTypes = [
     'dengue', 'leptospirosis', 'cholera', 'covid',
     'food_poisoning', 'respiratory', 'vector_borne', 'other',
@@ -45,16 +48,77 @@ class _HealthReportScreenState extends State<HealthReportScreen> {
   @override
   void initState() {
     super.initState();
+    for (final c in [_titleCtrl, _descCtrl, _preventionCtrl, _facilityCtrl]) {
+      c.addListener(_saveDraft);
+    }
+    _restoreDraft();
     _getLocation();
   }
 
   @override
   void dispose() {
+    _draft.dispose();
     _titleCtrl.dispose();
     _descCtrl.dispose();
     _preventionCtrl.dispose();
     _facilityCtrl.dispose();
     super.dispose();
+  }
+
+  Map<String, dynamic> _collectDraft() => {
+        'title':        _titleCtrl.text,
+        'description':  _descCtrl.text,
+        'prevention':   _preventionCtrl.text,
+        'facility':     _facilityCtrl.text,
+        'disease_type': _diseaseType,
+        'severity':     _severity,
+        'district':     _district,
+      };
+
+  void _saveDraft() => _draft.scheduleSave(_collectDraft);
+
+  Future<void> _restoreDraft() async {
+    final d = await _draft.load(meaningfulFields: [
+      'title', 'description', 'prevention', 'facility',
+    ]);
+    if (d == null || !mounted) return;
+    setState(() {
+      _titleCtrl.text      = d['title'] ?? '';
+      _descCtrl.text       = d['description'] ?? '';
+      _preventionCtrl.text = d['prevention'] ?? '';
+      _facilityCtrl.text   = d['facility'] ?? '';
+      if (_diseaseTypes.contains(d['disease_type'])) {
+        _diseaseType = d['disease_type'];
+      }
+      if (_severities.contains(d['severity'])) _severity = d['severity'];
+      if (_districts.contains(d['district']))  _district = d['district'];
+    });
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Unfinished report restored'),
+        backgroundColor: const Color(0xFF1C2F3F),
+        action: SnackBarAction(
+          label: 'Discard',
+          textColor: const Color(0xFF66BB6A),
+          onPressed: _discardDraft,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _discardDraft() async {
+    await _draft.clear();
+    if (!mounted) return;
+    setState(() {
+      _titleCtrl.clear();
+      _descCtrl.clear();
+      _preventionCtrl.clear();
+      _facilityCtrl.clear();
+      _diseaseType = 'dengue';
+      _severity    = 'medium';
+      _district    = 'Colombo';
+    });
   }
 
   Future<void> _getLocation() async {
@@ -190,6 +254,7 @@ class _HealthReportScreenState extends State<HealthReportScreen> {
                                 : _facilityCtrl.text.trim(),
       });
 
+      await _draft.clear();
       if (!mounted) { return; }
       _showResult(result);
     } catch (e) {
@@ -313,7 +378,10 @@ class _HealthReportScreenState extends State<HealthReportScreen> {
                   label: 'Disease / Hazard Type',
                   value: _diseaseType,
                   items: _diseaseTypes,
-                  onChanged: (v) => setState(() => _diseaseType = v!),
+                  onChanged: (v) {
+                    setState(() => _diseaseType = v!);
+                    _saveDraft();
+                  },
                 ),
               ),
               const SizedBox(width: 12),
@@ -322,7 +390,10 @@ class _HealthReportScreenState extends State<HealthReportScreen> {
                   label: 'Severity',
                   value: _severity,
                   items: _severities,
-                  onChanged: (v) => setState(() => _severity = v!),
+                  onChanged: (v) {
+                    setState(() => _severity = v!);
+                    _saveDraft();
+                  },
                 ),
               ),
             ]),
@@ -360,7 +431,10 @@ class _HealthReportScreenState extends State<HealthReportScreen> {
               label: 'District',
               value: _district,
               items: _districts,
-              onChanged: (v) => setState(() => _district = v!),
+              onChanged: (v) {
+                setState(() => _district = v!);
+                _saveDraft();
+              },
             ),
             const SizedBox(height: 8),
 

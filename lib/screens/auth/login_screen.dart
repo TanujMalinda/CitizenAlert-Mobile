@@ -37,6 +37,8 @@ class _LoginScreenState extends State<LoginScreen> {
                 ? 'Cannot reach server. Is the backend running?'
                 : 'Login failed. Check your credentials.');
       });
+    } catch (e) {
+      setState(() => _error = 'Login failed: ${e.toString()}');
     } finally {
       setState(() => _loading = false);
     }
